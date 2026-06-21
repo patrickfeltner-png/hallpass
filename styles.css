@@ -31,7 +31,8 @@ body {
 
 button,
 select,
-input {
+input,
+textarea {
   font: inherit;
 }
 
@@ -173,15 +174,30 @@ label {
 }
 
 select,
-input[type="text"] {
+input[type="text"],
+input[type="search"],
+input[type="number"],
+textarea {
   width: 100%;
-  min-height: 44px;
   padding: 0 12px;
   color: var(--ink);
   background: #fff;
   border: 1px solid var(--line);
   border-radius: 8px;
   outline: none;
+}
+
+select,
+input[type="text"],
+input[type="search"],
+input[type="number"] {
+  min-height: 44px;
+}
+
+textarea {
+  min-height: 112px;
+  padding-top: 10px;
+  resize: vertical;
 }
 
 select[multiple] {
@@ -202,6 +218,9 @@ input[type="password"] {
 
 select:focus,
 input[type="text"]:focus,
+input[type="search"]:focus,
+input[type="number"]:focus,
+textarea:focus,
 input[type="password"]:focus {
   border-color: var(--blue);
   box-shadow: 0 0 0 3px rgba(37, 124, 157, 0.16);
@@ -439,6 +458,20 @@ h1 {
   background: #9db2be;
 }
 
+.small-button {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 0.86rem;
+}
+
+.heading-actions,
+.button-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .ghost-button,
 .return-button {
   color: var(--blue-dark);
@@ -531,6 +564,11 @@ h1 {
   border-left: 5px solid var(--teal);
 }
 
+.out-card.alert-card {
+  border-left-color: var(--red);
+  background: #fff8f7;
+}
+
 .out-card h3 {
   margin: 0 0 5px;
   font-size: 1.05rem;
@@ -597,7 +635,8 @@ h1 {
 
 .display-page,
 .settings-layout,
-.data-center {
+.data-center,
+.settings-center {
   display: grid;
   gap: 18px;
   max-width: 1280px;
@@ -609,12 +648,28 @@ h1 {
 .report-summary,
 .chart-panel,
 .destination-panel,
-.trip-panel {
+.trip-panel,
+.settings-panel {
   padding: 18px;
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid rgba(217, 227, 234, 0.92);
   border-radius: 8px;
   box-shadow: var(--shadow);
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 18px;
+}
+
+.settings-panel {
+  display: grid;
+  gap: 13px;
+}
+
+.wide-panel {
+  grid-column: 1 / -1;
 }
 
 .data-hero {
@@ -833,7 +888,7 @@ h1 {
 
 .trip-row {
   display: grid;
-  grid-template-columns: 1.1fr 1fr 1.2fr 0.8fr 0.8fr;
+  grid-template-columns: 1.1fr 1fr 1.2fr 0.8fr 0.8fr 1fr;
   gap: 10px;
   align-items: center;
   padding: 11px 12px;
@@ -947,6 +1002,16 @@ h1 {
   background: #f6fbfd;
   border: 1px solid #dcecf1;
   border-radius: 8px;
+}
+
+.display-card li.alert-list-item {
+  background: #fff8f7;
+  border-color: #ffd2cd;
+}
+
+.danger-text {
+  color: #9a251e;
+  font-weight: 800;
 }
 
 .timer {

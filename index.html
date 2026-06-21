@@ -44,6 +44,7 @@
             <section class="teacher-subtabs">
               <button class="teacher-subtab active" type="button" data-teacher-tab="overview">Teacher Dashboard</button>
               <button class="teacher-subtab" type="button" data-teacher-tab="data">Data Center</button>
+              <button class="teacher-subtab" type="button" data-teacher-tab="settings">Settings</button>
             </section>
 
             <section class="hero-panel teacher-overview-panel">
@@ -104,6 +105,10 @@
                   Override reason
                   <input id="overrideReason" type="text" placeholder="Required for override">
                 </label>
+                <label>
+                  Optional note
+                  <input id="teacherTripNote" type="text" placeholder="Example: took pass, urgent, called home">
+                </label>
                 <button id="signoutButton" class="primary-action" type="submit">Sign Out</button>
                 <p id="signoutMessage" class="form-message" aria-live="polite"></p>
               </form>
@@ -145,7 +150,7 @@
             <section class="today-panel teacher-overview-panel">
               <div class="section-heading">
                 <span>Class Roster</span>
-                <button id="resetDayButton" class="ghost-button" type="button">Reset demo day</button>
+                <button id="resetDayButton" class="ghost-button" type="button">Clear today's trips</button>
               </div>
               <div id="todayCounts" class="student-counts"></div>
             </section>
@@ -227,9 +232,71 @@
               <section class="trip-panel">
                 <div class="section-heading">
                   <span>Trip Details</span>
-                  <strong id="tripCountLabel">0 trips</strong>
+                  <div class="heading-actions">
+                    <strong id="tripCountLabel">0 trips</strong>
+                    <button id="exportTripsButton" class="ghost-button small-button" type="button">Export CSV</button>
+                  </div>
                 </div>
                 <div id="tripTable" class="trip-table"></div>
+              </section>
+            </section>
+
+            <section id="settingsContent" class="settings-center hidden">
+              <section class="data-hero">
+                <div>
+                  <p class="eyebrow">Admin settings</p>
+                  <h1>School Setup</h1>
+                  <p>Manage privacy, alert timing, teacher contacts, and bulk roster tools.</p>
+                </div>
+              </section>
+
+              <section class="settings-grid">
+                <article class="settings-panel">
+                  <div class="section-heading">
+                    <span>Privacy</span>
+                  </div>
+                  <label class="check-row">
+                    <input id="privacyModeCheck" type="checkbox">
+                    Hide full student names on the public student display
+                  </label>
+                  <p class="settings-note">Teachers still see full names after entering the code. The student display will show first name and last initial.</p>
+                </article>
+
+                <article class="settings-panel">
+                  <div class="section-heading">
+                    <span>Long Absence Alerts</span>
+                  </div>
+                  <label>
+                    Alert after this many minutes
+                    <input id="alertMinutesInput" type="number" min="1" max="60" step="1">
+                  </label>
+                  <label>
+                    Teacher alert contacts
+                    <textarea id="alertContactsInput" rows="4" placeholder="One email or phone number per line"></textarea>
+                  </label>
+                  <p class="settings-note">The app now shows in-app alerts. Real text/email needs a small backend service; instructions are in the setup file.</p>
+                  <button id="saveSettingsButton" class="primary-action" type="button">Save Settings</button>
+                  <p id="settingsMessage" class="form-message" aria-live="polite"></p>
+                </article>
+
+                <article class="settings-panel wide-panel">
+                  <div class="section-heading">
+                    <span>Bulk Roster Import</span>
+                  </div>
+                  <label>
+                    Grade
+                    <select id="bulkImportGradeSelect"></select>
+                  </label>
+                  <label>
+                    Student names
+                    <textarea id="bulkStudentInput" rows="8" placeholder="Paste one student per line"></textarea>
+                  </label>
+                  <div class="button-row">
+                    <button id="bulkImportButton" class="primary-action" type="button">Import Students</button>
+                    <button id="downloadRosterButton" class="ghost-button" type="button">Download Roster CSV</button>
+                  </div>
+                  <p id="bulkImportMessage" class="form-message" aria-live="polite"></p>
+                </article>
               </section>
             </section>
           </div>

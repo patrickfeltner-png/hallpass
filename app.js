@@ -11,7 +11,9 @@ import {
 
 const DAILY_LIMIT = 3;
 const CLASS_OUT_LIMIT = 2;
+const LONG_ABSENCE_MINUTES = 10;
 const STORAGE_KEY = "hallpass-demo-state-v3";
+const LEGACY_MIGRATION_KEY = "hallpass-legacy-students-migrated-v1";
 const TEACHER_CODE = "6767";
 const CLASS_PERIOD_MINUTES = 75;
 const SCHOOL_DAY_MINUTES = 450;
@@ -47,7 +49,13 @@ const defaultState = {
   selectedDisplayGrade: "5",
   teacherNames: Object.fromEntries(teachers.map((teacher) => [teacher.id, teacher.name])),
   extraStudents: [],
+  archivedStudentIds: [],
   medicalNotes: Object.fromEntries(baseStudents.map((student) => [student.id, student.medicalNote])),
+  settings: {
+    privacyMode: false,
+    longAbsenceMinutes: LONG_ABSENCE_MINUTES,
+    alertContacts: []
+  },
   trips: []
 };
 
@@ -57,6 +65,7 @@ let selectedReportStudentIdValue = "all";
 let firestoreDb = null;
 let firestoreStateRef = null;
 let isApplyingRemoteState = false;
+let legacyStudentsToMigrate = [];
 
 const els = {
   tabs: document.querySelectorAll(".tab"),
@@ -99,6 +108,17 @@ const els = {
   manageMessage: document.querySelector("#manageMessage"),
   todayCounts: document.querySelector("#todayCounts"),
   resetDayButton: document.querySelector("#resetDayButton"),
+  settingsContent: document.querySelector("#settingsContent"),
+  privacyModeCheck: document.querySelector("#privacyModeCheck"),
+  alertMinutesInput: document.querySelector("#alertMinutesInput"),
+  alertContactsInput: document.querySelector("#alertContactsInput"),
+  saveSettingsButton: document.querySelector("#saveSettingsButton"),
+  settingsMessage: document.querySelector("#settingsMessage"),
+  bulkImportGradeSelect: document.querySelector("#bulkImportGradeSelect"),
+  bulkStudentInput: document.querySelector("#bulkStudentInput"),
+  bulkImportButton: document.querySelector("#bulkImportButton"),
+  downloadRosterButton: document.querySelector("#downloadRosterButton"),
+  bulkImportMessage: document.querySelector("#bulkImportMessage"),
   displayTotalOut: document.querySelector("#displayTotalOut"),
   displayCapacity: document.querySelector("#displayCapacity"),
   displaySignoutForm: document.querySelector("#displaySignoutForm"),
@@ -131,7 +151,9 @@ const els = {
   destinationBreakdownLabel: document.querySelector("#destinationBreakdownLabel"),
   destinationBreakdown: document.querySelector("#destinationBreakdown"),
   tripCountLabel: document.querySelector("#tripCountLabel"),
-  tripTable: document.querySelector("#tripTable")
+  tripTable: document.querySelector("#tripTable"),
+  exportTripsButton: document.querySelector("#exportTripsButton"),
+  teacherTripNote: document.querySelector("#teacherTripNote")
 };
 
 function loadState() {
@@ -150,8 +172,14 @@ function normalizeState(nextState) {
     ...nextState,
     teacherNames: { ...defaultState.teacherNames, ...nextState?.teacherNames },
     extraStudents: Array.isArray(nextState?.extraStudents) ? nextState.extraStudents : [],
+    archivedStudentIds: Array.isArray(nextState?.archivedStudentIds) ? nextState.archivedStudentIds : [],
     trips: Array.isArray(nextState?.trips) ? nextState.trips : [],
-    medicalNotes: { ...defaultState.medicalNotes, ...nextState?.medicalNotes }
+    medicalNotes: { ...defaultState.medicalNotes, ...nextState?.medicalNotes },
+    settings: {
+      ...defaultState.settings,
+      ...(nextState?.settings || {}),
+      alertContacts: Array.isArray(nextState?.settings?.alertContacts) ? nextState.settings.alertContacts : []
+    }
   };
 }
 
@@ -161,6 +189,22 @@ function getAllStudents() {
 
 function refreshStudents() {
   students = getAllStudents();
+}
+
+function isArchivedStudent(studentId) {
+  return state.archivedStudentIds.includes(studentId);
+}
+
+function activeStudents() {
+  return students.filter((student) => !isArchivedStudent(student.id));
+}
+
+function displayStudentName(student) {
+  if (!student) return "Student";
+  if (!state.settings.privacyMode) return student.name;
+  const parts = student.name.trim().split(/\s+/);
+  if (parts.length < 2) return student.name;
+  return `${parts[0]} ${parts.at(-1).slice(0, 1)}.`;
 }
 
 function escapeHtml(value) {
@@ -195,6 +239,58 @@ function saveState() {
   });
 }
 
+function readLegacyStudentsForMigration() {
+  if (localStorage.getItem(LEGACY_MIGRATION_KEY) === "done") return [];
+  const legacyKeys = [
+    "hallpass-demo-state-v1",
+    "hallpass-demo-state-v2",
+    "hallpass-demo-state-v3"
+  ];
+  const found = [];
+  legacyKeys.forEach((key) => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(key) || "{}");
+      if (!Array.isArray(saved.extraStudents)) return;
+      saved.extraStudents.forEach((student) => {
+        if (!student?.name || !student?.grade) return;
+        found.push({
+          id: `s-migrated-${crypto.randomUUID()}`,
+          name: student.name,
+          grade: String(student.grade),
+          medicalNote: Boolean(student.medicalNote)
+        });
+      });
+    } catch {
+      // Ignore malformed old prototype data.
+    }
+  });
+  return found;
+}
+
+function mergeLegacyStudents() {
+  if (!legacyStudentsToMigrate.length) return false;
+  const existing = new Set((state.extraStudents || []).map((student) => `${student.name.trim().toLowerCase()}|${student.grade}`));
+  const additions = legacyStudentsToMigrate.filter((student) => {
+    const key = `${student.name.trim().toLowerCase()}|${student.grade}`;
+    if (existing.has(key)) return false;
+    existing.add(key);
+    return true;
+  });
+  if (!additions.length) {
+    localStorage.setItem(LEGACY_MIGRATION_KEY, "done");
+    return false;
+  }
+  additions.forEach((student) => {
+    state.extraStudents.push(student);
+    state.medicalNotes[student.id] = Boolean(student.medicalNote);
+  });
+  localStorage.setItem(LEGACY_MIGRATION_KEY, "done");
+  refreshStudents();
+  saveState();
+  console.info(`Migrated ${additions.length} legacy HallPass students into Firestore.`);
+  return true;
+}
+
 function hasFirebaseConfig() {
   return Boolean(firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.appId);
 }
@@ -206,6 +302,7 @@ async function initializeSharedData() {
   }
 
   try {
+    legacyStudentsToMigrate = readLegacyStudentsForMigration();
     const firebaseApp = initializeApp(firebaseConfig);
     firestoreDb = getFirestore(firebaseApp);
     firestoreStateRef = doc(
@@ -231,9 +328,11 @@ async function initializeSharedData() {
       state = normalizeState(remoteSnapshot.data());
       refreshStudents();
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      isApplyingRemoteState = false;
+      const migrated = mergeLegacyStudents();
       populateSelects();
       render();
-      isApplyingRemoteState = false;
+      if (migrated) return;
     }, (error) => {
       console.warn("Could not subscribe to shared HallPass data. Local fallback is still available.", error);
     });
@@ -256,11 +355,16 @@ function teacherClasses() {
 }
 
 function studentsForClass(teacherId, grade) {
-  return students.filter((student) => student.grade === grade);
+  return activeStudents().filter((student) => student.grade === grade);
 }
 
 function studentById(id) {
   return students.find((student) => student.id === id);
+}
+
+function studentNameForTrip(trip, options = {}) {
+  const student = studentById(trip.studentId);
+  return options.privateDisplay ? displayStudentName(student) : student?.name || "Student";
 }
 
 function teacherById(id) {
@@ -372,6 +476,7 @@ function populateSelects() {
     .join("");
   els.teacherGradeSelect.innerHTML = grades.map((grade) => `<option value="${grade}">${gradeLabel(grade)}</option>`).join("");
   els.addStudentGradeSelect.innerHTML = grades.map((grade) => `<option value="${grade}">${gradeLabel(grade)}</option>`).join("");
+  els.bulkImportGradeSelect.innerHTML = grades.map((grade) => `<option value="${grade}">${gradeLabel(grade)}</option>`).join("");
   els.destinationSelect.innerHTML = destinations.map((destination) => `<option value="${destination}">${destination}</option>`).join("");
   els.destinationTeacherSelect.innerHTML = teachers.map((teacher) => `<option value="${teacher.id}">${escapeHtml(teacherName(teacher))} - ${teacher.room}</option>`).join("");
   els.displayTeacherSelect.innerHTML = teacherClasses()
@@ -384,6 +489,7 @@ function populateSelects() {
   els.teacherSelect.value = state.selectedTeacherId;
   els.teacherGradeSelect.value = state.selectedTeacherGrade;
   els.addStudentGradeSelect.value = state.selectedTeacherGrade;
+  els.bulkImportGradeSelect.value = state.selectedTeacherGrade;
   els.displayTeacherSelect.value = state.selectedDisplayTeacherId;
   els.displayGradeSelect.value = state.selectedDisplayGrade;
   populateTeacherStudentSelect();
@@ -534,17 +640,24 @@ function renderCurrentOut(trips, container) {
     container.innerHTML = '<p class="empty">No one is signed out from this class.</p>';
     return;
   }
+  const alertMinutes = Number(state.settings.longAbsenceMinutes) || LONG_ABSENCE_MINUTES;
   container.innerHTML = trips
-    .map((trip) => `
-      <article class="out-card">
+    .map((trip) => {
+      const minutesOut = tripMinutes(trip);
+      const needsAlert = minutesOut >= alertMinutes;
+      return `
+      <article class="out-card ${needsAlert ? "alert-card" : ""}">
         <div>
-          <h3>${escapeHtml(studentById(trip.studentId)?.name || "Student")}</h3>
+          <h3>${escapeHtml(studentNameForTrip(trip))}</h3>
           <p class="meta">${escapeHtml(formatDestination(trip))} - out ${elapsedLabel(trip.leftAt)}</p>
+          ${trip.note ? `<p class="meta">Note: ${escapeHtml(trip.note)}</p>` : ""}
           <span class="pill">${escapeHtml(trip.allowedBy)}</span>
+          ${needsAlert ? `<span class="pill danger">over ${alertMinutes} min</span>` : ""}
         </div>
         <button class="return-button" type="button" data-return-id="${trip.id}">Sign Back In</button>
       </article>
-    `)
+    `;
+    })
     .join("");
 }
 
@@ -570,7 +683,7 @@ function renderRosterForTeacher(teacher, grade) {
             Doctor's note
           </label>
           <span class="pill ${locked ? "danger" : ""}">${locked ? "locked" : "active"}</span>
-          <button class="delete-button" type="button" data-delete-student-id="${student.id}">Delete</button>
+          <button class="delete-button" type="button" data-delete-student-id="${student.id}">Remove</button>
         </article>
       `;
     })
@@ -600,6 +713,7 @@ function renderDisplayView() {
   els.displayCards.innerHTML = teacherClasses()
     .map((teacher) => {
       const trips = active.filter((trip) => trip.teacherId === teacher.id);
+      const alertMinutes = Number(state.settings.longAbsenceMinutes) || LONG_ABSENCE_MINUTES;
       return `
         <article class="display-card">
           <header>
@@ -612,10 +726,11 @@ function renderDisplayView() {
           ${
             trips.length
               ? `<ul>${trips.map((trip) => `
-                  <li>
-                    <strong>${escapeHtml(studentById(trip.studentId)?.name || "Student")}</strong>
+                  <li class="${tripMinutes(trip) >= alertMinutes ? "alert-list-item" : ""}">
+                    <strong>${escapeHtml(studentNameForTrip(trip, { privateDisplay: true }))}</strong>
                     <div class="meta">${gradeLabel(studentById(trip.studentId)?.grade || "")} - ${escapeHtml(formatDestination(trip))}</div>
                     <div class="timer">${elapsedLabel(trip.leftAt)}</div>
+                    ${tripMinutes(trip) >= alertMinutes ? `<div class="meta danger-text">Please check in with the teacher.</div>` : ""}
                     <button class="return-button" type="button" data-return-id="${trip.id}">Sign Back In</button>
                   </li>
                 `).join("")}</ul>`
@@ -631,6 +746,7 @@ function renderTeacherSubtabs() {
   els.teacherSubtabs.forEach((tab) => tab.classList.toggle("active", tab.dataset.teacherTab === teacherSubtab));
   els.teacherOverviewPanels.forEach((panel) => panel.classList.toggle("hidden", teacherSubtab !== "overview"));
   els.dataContent.classList.toggle("hidden", teacherSubtab !== "data");
+  els.settingsContent.classList.toggle("hidden", teacherSubtab !== "settings");
 }
 
 function renderDataCenter() {
@@ -673,6 +789,20 @@ function renderDataCenter() {
   renderTripTable(trips);
 }
 
+function renderSettings() {
+  if (!teacherUnlocked || teacherSubtab !== "settings") return;
+  els.privacyModeCheck.checked = Boolean(state.settings.privacyMode);
+  if (document.activeElement !== els.alertMinutesInput) {
+    els.alertMinutesInput.value = Number(state.settings.longAbsenceMinutes) || LONG_ABSENCE_MINUTES;
+  }
+  if (document.activeElement !== els.alertContactsInput) {
+    els.alertContactsInput.value = (state.settings.alertContacts || []).join("\n");
+  }
+  if (!els.bulkImportGradeSelect.value) {
+    els.bulkImportGradeSelect.value = state.selectedTeacherGrade;
+  }
+}
+
 function renderStudentSearchResults() {
   const query = els.reportStudentSearch.value.trim().toLowerCase();
   if (!query) {
@@ -680,7 +810,7 @@ function renderStudentSearchResults() {
     els.reportStudentResults.innerHTML = "";
     return;
   }
-  const matches = students
+  const matches = activeStudents()
     .filter((student) => student.name.toLowerCase().includes(query))
     .sort((a, b) => a.grade.localeCompare(b.grade) || a.name.localeCompare(b.name))
     .slice(0, 8);
@@ -805,6 +935,7 @@ function renderTripTable(trips) {
       <span>Destination</span>
       <span>Date</span>
       <span>Time gone</span>
+      <span>Note</span>
     </div>
     ${trips.map((trip) => {
       const student = studentById(trip.studentId);
@@ -815,6 +946,7 @@ function renderTripTable(trips) {
           <span>${escapeHtml(formatDestination(trip))}</span>
           <span>${new Date(trip.leftAt).toLocaleDateString()}</span>
           <span>${minutesLabel(tripMinutes(trip))}</span>
+          <span>${escapeHtml(trip.note || trip.overrideReason || "")}</span>
         </div>
       `;
     }).join("")}
@@ -834,7 +966,7 @@ function updateDisplaySignoutButton() {
   els.displaySignoutMessage.textContent = result.allowed ? "Ready to sign out." : result.reason;
 }
 
-function createTrip({ studentId, teacherId, destination, destinationTeacherId, allowedBy, overrideReason = "" }) {
+function createTrip({ studentId, teacherId, destination, destinationTeacherId, allowedBy, overrideReason = "", note = "" }) {
   state.trips.unshift({
     id: crypto.randomUUID(),
     studentId,
@@ -844,7 +976,8 @@ function createTrip({ studentId, teacherId, destination, destinationTeacherId, a
     leftAt: Date.now(),
     returnedAt: null,
     allowedBy,
-    overrideReason
+    overrideReason,
+    note
   });
   saveState();
 }
@@ -872,10 +1005,12 @@ function teacherSignOut(event) {
     destination,
     destinationTeacherId: destination === "Another Teacher's Room" ? els.destinationTeacherSelect.value : "",
     allowedBy: check.allowedBy,
-    overrideReason: wantsOverride ? els.overrideReason.value.trim() : ""
+    overrideReason: wantsOverride ? els.overrideReason.value.trim() : "",
+    note: els.teacherTripNote.value.trim()
   });
   els.overrideCheck.checked = false;
   els.overrideReason.value = "";
+  els.teacherTripNote.value = "";
   render();
 }
 
@@ -912,23 +1047,20 @@ function returnStudent(tripId) {
 function deleteStudent(studentId) {
   const student = studentById(studentId);
   if (!student) return;
-  state.extraStudents = state.extraStudents.filter((item) => item.id !== studentId);
-  delete state.medicalNotes[studentId];
-  state.trips = state.trips.filter((trip) => trip.studentId !== studentId);
+  if (!state.archivedStudentIds.includes(studentId)) {
+    state.archivedStudentIds.push(studentId);
+  }
   refreshStudents();
   saveState();
   populateTeacherStudentSelect();
   populateDisplayStudentSelect();
-  els.manageMessage.textContent = `${student.name} deleted.`;
+  els.manageMessage.textContent = `${student.name} removed from the active roster. Their history is still in Data Center.`;
   render();
 }
 
 function resetDay() {
-  state = structuredClone(defaultState);
-  state.selectedTeacherId = els.teacherSelect.value;
-  state.selectedTeacherGrade = els.teacherGradeSelect.value;
-  state.selectedDisplayTeacherId = els.displayTeacherSelect.value;
-  state.selectedDisplayGrade = els.displayGradeSelect.value;
+  const today = new Date().toDateString();
+  state.trips = state.trips.filter((trip) => new Date(trip.leftAt).toDateString() !== today);
   refreshStudents();
   saveState();
   populateSelects();
@@ -993,6 +1125,128 @@ function addStudent(event) {
   els.newStudentNameInput.value = "";
   els.manageMessage.textContent = `${name} added to ${gradeLabel(grade)}.`;
   render();
+}
+
+function saveSettings() {
+  const minutes = Math.max(1, Math.min(60, Number(els.alertMinutesInput.value) || LONG_ABSENCE_MINUTES));
+  state.settings = {
+    ...state.settings,
+    privacyMode: els.privacyModeCheck.checked,
+    longAbsenceMinutes: minutes,
+    alertContacts: els.alertContactsInput.value
+      .split(/\r?\n/)
+      .map((contact) => contact.trim())
+      .filter(Boolean)
+  };
+  saveState();
+  els.settingsMessage.textContent = "Settings saved.";
+  render();
+}
+
+function bulkImportStudents() {
+  const grade = els.bulkImportGradeSelect.value;
+  const names = els.bulkStudentInput.value
+    .split(/\r?\n/)
+    .map((name) => name.trim())
+    .filter(Boolean);
+
+  if (!names.length) {
+    els.bulkImportMessage.textContent = "Paste at least one student name first.";
+    return;
+  }
+
+  const existing = new Set(activeStudents().map((student) => `${student.name.trim().toLowerCase()}|${student.grade}`));
+  const additions = [];
+  names.forEach((name) => {
+    const key = `${name.toLowerCase()}|${grade}`;
+    if (existing.has(key)) return;
+    existing.add(key);
+    additions.push({
+      id: `s-custom-${crypto.randomUUID()}`,
+      name,
+      grade,
+      medicalNote: false
+    });
+  });
+
+  additions.forEach((student) => {
+    state.extraStudents.push(student);
+    state.medicalNotes[student.id] = false;
+  });
+  state.selectedTeacherGrade = grade;
+  refreshStudents();
+  saveState();
+  populateSelects();
+  els.bulkStudentInput.value = "";
+  els.bulkImportMessage.textContent = additions.length
+    ? `${additions.length} students imported to ${gradeLabel(grade)}.`
+    : "Those students were already on the active roster.";
+  render();
+}
+
+function csvEscape(value) {
+  const text = String(value ?? "");
+  return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+function downloadCsv(filename, rows) {
+  const csv = rows.map((row) => row.map(csvEscape).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function exportFilteredTrips() {
+  const rows = [[
+    "Student",
+    "Grade",
+    "Class",
+    "Destination",
+    "Date",
+    "Left",
+    "Returned",
+    "Minutes",
+    "Allowed By",
+    "Note"
+  ]];
+  filteredTrips().forEach((trip) => {
+    const student = studentById(trip.studentId);
+    rows.push([
+      student?.name || "Student",
+      student?.grade || "",
+      teacherName(trip.teacherId),
+      formatDestination(trip),
+      new Date(trip.leftAt).toLocaleDateString(),
+      new Date(trip.leftAt).toLocaleTimeString(),
+      trip.returnedAt ? new Date(trip.returnedAt).toLocaleTimeString() : "Still out",
+      Math.round(tripMinutes(trip)),
+      trip.allowedBy,
+      trip.note || trip.overrideReason || ""
+    ]);
+  });
+  downloadCsv(`hallpass-trips-${dateInputValue(new Date())}.csv`, rows);
+}
+
+function downloadRosterCsv() {
+  const rows = [["Name", "Grade", "Doctor Note", "Active"]];
+  students
+    .slice()
+    .sort((a, b) => a.grade.localeCompare(b.grade) || a.name.localeCompare(b.name))
+    .forEach((student) => {
+      rows.push([
+        student.name,
+        gradeLabel(student.grade),
+        state.medicalNotes[student.id] ? "Yes" : "No",
+        isArchivedStudent(student.id) ? "No" : "Yes"
+      ]);
+    });
+  downloadCsv(`hallpass-roster-${dateInputValue(new Date())}.csv`, rows);
 }
 
 function bindEvents() {
@@ -1068,6 +1322,10 @@ function bindEvents() {
   });
   els.teacherNameForm.addEventListener("submit", saveTeacherName);
   els.addStudentForm.addEventListener("submit", addStudent);
+  els.saveSettingsButton.addEventListener("click", saveSettings);
+  els.bulkImportButton.addEventListener("click", bulkImportStudents);
+  els.downloadRosterButton.addEventListener("click", downloadRosterCsv);
+  els.exportTripsButton.addEventListener("click", exportFilteredTrips);
   els.resetDayButton.addEventListener("click", resetDay);
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-return-id]");
@@ -1093,6 +1351,7 @@ function render() {
   renderTeacherView();
   renderDisplayView();
   renderDataCenter();
+  renderSettings();
 }
 
 populateSelects();
