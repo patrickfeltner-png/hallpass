@@ -1,14 +1,21 @@
 {
-  "cleanUrls": true,
-  "headers": [
-    {
-      "source": "/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "no-store"
-        }
-      ]
-    }
+  "version": 2,
+  "builds": [
+    { "src": "api/**/*.js", "use": "@vercel/node" },
+    { "src": "index.html", "use": "@vercel/static" },
+    { "src": "app.js", "use": "@vercel/static" },
+    { "src": "standards-data.js", "use": "@vercel/static" },
+    { "src": "standards.json", "use": "@vercel/static" },
+    { "src": "styles.css", "use": "@vercel/static" },
+    { "src": "*.png", "use": "@vercel/static" }
+  ],
+  "routes": [
+    { "src": "/api/(.*)", "dest": "/api/$1.js" },
+    { "src": "/app.js", "dest": "/app.js" },
+    { "src": "/standards-data.js", "dest": "/standards-data.js" },
+    { "src": "/standards.json", "dest": "/standards.json" },
+    { "src": "/styles.css", "dest": "/styles.css" },
+    { "src": "/(.*\\.png)", "dest": "/$1" },
+    { "src": "/(.*)", "dest": "/index.html" }
   ]
 }
