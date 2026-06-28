@@ -1,1361 +1,1398 @@
-import { firebaseConfig, firestoreSettings } from "./firebase-config.js";
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
-import {
-  doc,
-  getDoc,
-  getFirestore,
-  onSnapshot,
-  serverTimestamp,
-  setDoc
-} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+const actualToday = new Date();
+const actualISODate = toISODate(actualToday);
+const isoToday = latestSchoolDate(actualToday);
 
-const DAILY_LIMIT = 3;
-const CLASS_OUT_LIMIT = 2;
-const LONG_ABSENCE_MINUTES = 10;
-const STORAGE_KEY = "hallpass-demo-state-v3";
-const LEGACY_MIGRATION_KEY = "hallpass-legacy-students-migrated-v1";
-const TEACHER_CODE = "6767";
-const CLASS_PERIOD_MINUTES = 75;
-const SCHOOL_DAY_MINUTES = 450;
-
-const grades = ["5", "6", "7", "8"];
-
-let teacherUnlocked = false;
-let teacherSubtab = "overview";
-
-const teachers = [
-  { id: "t-1", name: "", room: "Classroom 1" },
-  { id: "t-2", name: "", room: "Classroom 2" },
-  { id: "t-3", name: "", room: "Classroom 3" },
-  { id: "t-4", name: "", room: "Classroom 4" },
-  { id: "t-deb", name: "Mrs. Deb", room: "Student Support" }
-];
-
-const baseStudents = [];
-
-const destinations = [
-  "Restroom",
-  "Nurse",
-  "Office",
-  "Mrs. Deb's Office",
-  "Another Teacher's Room",
-  "Water Break"
-];
-
-const defaultState = {
-  selectedTeacherId: teachers[0].id,
-  selectedTeacherGrade: "5",
-  selectedDisplayTeacherId: teachers[0].id,
-  selectedDisplayGrade: "5",
-  teacherNames: Object.fromEntries(teachers.map((teacher) => [teacher.id, teacher.name])),
-  extraStudents: [],
-  archivedStudentIds: [],
-  medicalNotes: Object.fromEntries(baseStudents.map((student) => [student.id, student.medicalNote])),
-  settings: {
-    privacyMode: false,
-    longAbsenceMinutes: LONG_ABSENCE_MINUTES,
-    alertContacts: []
+const state = {
+  role: "teacher",
+  email: "",
+  teacherAuthenticated: false,
+  page: {
+    name: "6th Grade ELA - Homeroom",
+    code: "HART-ELA6",
+    subject: "English Language Arts",
+    grade: "6"
   },
-  trips: []
+  classes: [],
+  activeClassId: "",
+  selectedStandardCodes: [],
+  standardsPickerVersion: 0,
+  selectedDates: [isoToday],
+  dateConfigs: {},
+  calendarMonth: isoToday.slice(0, 7),
+  generatedDrafts: {},
+  ringers: {},
+  ringersByClass: {},
+  submissions: [],
+  approvedTeachers: ["patrick.feltner@knott.kyschools.us"],
+  pendingTeacherApprovals: [],
+  students: [
+    { name: "Avery Johnson", email: "avery.johnson@stu.fayette.kyschools.us" },
+    { name: "Maya Chen", email: "maya.chen@stu.fayette.kyschools.us" },
+    { name: "Jordan Smith", email: "jordan.smith@stu.fayette.kyschools.us" }
+  ]
 };
 
-let state = loadState();
-let students = getAllStudents();
-let selectedReportStudentIdValue = "all";
-let firestoreDb = null;
-let firestoreStateRef = null;
-let isApplyingRemoteState = false;
-let legacyStudentsToMigrate = [];
-
-const els = {
-  tabs: document.querySelectorAll(".tab"),
-  views: {
-    teacher: document.querySelector("#teacherView"),
-    display: document.querySelector("#displayView")
-  },
-  teacherSubtabs: document.querySelectorAll(".teacher-subtab"),
-  teacherOverviewPanels: document.querySelectorAll(".teacher-overview-panel"),
-  teacherLock: document.querySelector("#teacherLock"),
-  teacherContent: document.querySelector("#teacherContent"),
-  teacherCodeForm: document.querySelector("#teacherCodeForm"),
-  teacherCodeInput: document.querySelector("#teacherCodeInput"),
-  teacherCodeMessage: document.querySelector("#teacherCodeMessage"),
-  teacherSelect: document.querySelector("#teacherSelect"),
-  teacherTitle: document.querySelector("#teacherTitle"),
-  teacherSummary: document.querySelector("#teacherSummary"),
-  otherClassesCount: document.querySelector("#otherClassesCount"),
-  otherClassesList: document.querySelector("#otherClassesList"),
-  classCapacity: document.querySelector("#classCapacity"),
-  teacherGradeSelect: document.querySelector("#teacherGradeSelect"),
-  studentSelect: document.querySelector("#studentSelect"),
-  destinationSelect: document.querySelector("#destinationSelect"),
-  teacherDestinationField: document.querySelector("#teacherDestinationField"),
-  destinationTeacherSelect: document.querySelector("#destinationTeacherSelect"),
-  selectedStudentInfo: document.querySelector("#selectedStudentInfo"),
-  overrideCheck: document.querySelector("#overrideCheck"),
-  overrideReasonField: document.querySelector("#overrideReasonField"),
-  overrideReason: document.querySelector("#overrideReason"),
-  signoutForm: document.querySelector("#signoutForm"),
-  signoutButton: document.querySelector("#signoutButton"),
-  signoutMessage: document.querySelector("#signoutMessage"),
-  currentOutList: document.querySelector("#currentOutList"),
-  outWarning: document.querySelector("#outWarning"),
-  teacherNameForm: document.querySelector("#teacherNameForm"),
-  teacherNameInput: document.querySelector("#teacherNameInput"),
-  addStudentForm: document.querySelector("#addStudentForm"),
-  addStudentGradeSelect: document.querySelector("#addStudentGradeSelect"),
-  newStudentNameInput: document.querySelector("#newStudentNameInput"),
-  manageMessage: document.querySelector("#manageMessage"),
-  todayCounts: document.querySelector("#todayCounts"),
-  resetDayButton: document.querySelector("#resetDayButton"),
-  settingsContent: document.querySelector("#settingsContent"),
-  privacyModeCheck: document.querySelector("#privacyModeCheck"),
-  alertMinutesInput: document.querySelector("#alertMinutesInput"),
-  alertContactsInput: document.querySelector("#alertContactsInput"),
-  saveSettingsButton: document.querySelector("#saveSettingsButton"),
-  settingsMessage: document.querySelector("#settingsMessage"),
-  bulkImportGradeSelect: document.querySelector("#bulkImportGradeSelect"),
-  bulkStudentInput: document.querySelector("#bulkStudentInput"),
-  bulkImportButton: document.querySelector("#bulkImportButton"),
-  downloadRosterButton: document.querySelector("#downloadRosterButton"),
-  bulkImportMessage: document.querySelector("#bulkImportMessage"),
-  displayTotalOut: document.querySelector("#displayTotalOut"),
-  displayCapacity: document.querySelector("#displayCapacity"),
-  displaySignoutForm: document.querySelector("#displaySignoutForm"),
-  displayTeacherSelect: document.querySelector("#displayTeacherSelect"),
-  displayGradeSelect: document.querySelector("#displayGradeSelect"),
-  displayStudentSelect: document.querySelector("#displayStudentSelect"),
-  displayDestinationSelect: document.querySelector("#displayDestinationSelect"),
-  displayTeacherDestinationField: document.querySelector("#displayTeacherDestinationField"),
-  displayDestinationTeacherSelect: document.querySelector("#displayDestinationTeacherSelect"),
-  displaySignoutButton: document.querySelector("#displaySignoutButton"),
-  displaySignoutMessage: document.querySelector("#displaySignoutMessage"),
-  capacityAlert: document.querySelector("#capacityAlert"),
-  displayCards: document.querySelector("#displayCards"),
-  dataContent: document.querySelector("#dataContent"),
-  reportStudentSearch: document.querySelector("#reportStudentSearch"),
-  reportStudentResults: document.querySelector("#reportStudentResults"),
-  selectedStudentBanner: document.querySelector("#selectedStudentBanner"),
-  reportRangeSelect: document.querySelector("#reportRangeSelect"),
-  reportStartField: document.querySelector("#reportStartField"),
-  reportEndField: document.querySelector("#reportEndField"),
-  reportStartDate: document.querySelector("#reportStartDate"),
-  reportEndDate: document.querySelector("#reportEndDate"),
-  reportDestinationSelect: document.querySelector("#reportDestinationSelect"),
-  reportTeacherSelect: document.querySelector("#reportTeacherSelect"),
-  reportScopeSelect: document.querySelector("#reportScopeSelect"),
-  reportPieTeacherChecks: document.querySelector("#reportPieTeacherChecks"),
-  reportSummary: document.querySelector("#reportSummary"),
-  studentPieLabel: document.querySelector("#studentPieLabel"),
-  studentPieChart: document.querySelector("#studentPieChart"),
-  destinationBreakdownLabel: document.querySelector("#destinationBreakdownLabel"),
-  destinationBreakdown: document.querySelector("#destinationBreakdown"),
-  tripCountLabel: document.querySelector("#tripCountLabel"),
-  tripTable: document.querySelector("#tripTable"),
-  exportTripsButton: document.querySelector("#exportTripsButton"),
-  teacherTripNote: document.querySelector("#teacherTripNote")
+const teacherCredentials = {
+  "patrick.feltner@knott.kyschools.us": "Smackdown!19",
+  "ms.hart@fayette.kyschools.us": "BellRinger2026!",
+  "teacher@school.edu": "BellRinger2026!"
 };
 
-function loadState() {
-  const saved = localStorage.getItem(STORAGE_KEY);
-  if (!saved) return structuredClone(defaultState);
+const fallbackStandards = [
+  ["KY.5.RI.2", "English Language Arts", "5", "Determine two or more main ideas of a text and explain how they are supported by key details."],
+  ["KY.5.RL.1", "English Language Arts", "5", "Quote accurately from a text when explaining what the text says explicitly and when drawing inferences."],
+  ["KY.5.NF.6", "Mathematics", "5", "Solve real world problems involving multiplication of fractions and mixed numbers."],
+  ["KY.5.MD.1", "Mathematics", "5", "Convert among different-sized standard measurement units within a given measurement system."],
+  ["KY.5-PS1-3", "Science", "5", "Make observations and measurements to identify materials based on their properties."],
+  ["KY.SS.5.H.CH.1", "Social Studies", "5", "Explain how people and events influenced the development of the United States."],
+  ["KY.6.RI.2", "English Language Arts", "6", "Determine a central idea of a text and how it is conveyed through particular details."],
+  ["KY.6.RL.1", "English Language Arts", "6", "Cite textual evidence to support analysis of what the text says explicitly and inferences drawn from the text."],
+  ["KY.6.NS.1", "Mathematics", "6", "Interpret and compute quotients of fractions, and solve word problems involving division of fractions by fractions."],
+  ["KY.6.EE.6", "Mathematics", "6", "Use variables to represent numbers and write expressions when solving real-world problems."],
+  ["KY.MS-PS1-2", "Science", "6", "Analyze and interpret data on the properties of substances before and after the substances interact."],
+  ["KY.SS.6.G.KGE.1", "Social Studies", "6", "Use maps, charts, and graphs to explain how geography influences settlement and culture."],
+  ["KY.7.W.2", "English Language Arts", "7", "Write informative or explanatory texts to examine a topic and convey ideas clearly."],
+  ["KY.7.RI.8", "English Language Arts", "7", "Trace and evaluate the argument and specific claims in a text."],
+  ["KY.7.RP.2", "Mathematics", "7", "Recognize and represent proportional relationships between quantities."],
+  ["KY.7.EE.4", "Mathematics", "7", "Use variables to represent quantities in a real-world problem and construct equations or inequalities."],
+  ["KY.MS-LS2-1", "Science", "7", "Analyze and interpret data to provide evidence for the effects of resource availability on organisms."],
+  ["KY.SS.7.H.CH.1", "Social Studies", "7", "Explain how historical events and human choices shaped civilizations and societies."],
+  ["KY.8.SL.4", "English Language Arts", "8", "Present claims and findings with relevant evidence, sound reasoning, and well-chosen details."],
+  ["KY.8.RI.6", "English Language Arts", "8", "Determine an author's point of view or purpose and analyze how the author responds to conflicting evidence."],
+  ["KY.8.EE.5", "Mathematics", "8", "Graph proportional relationships, interpreting the unit rate as the slope of the graph."],
+  ["KY.8.F.4", "Mathematics", "8", "Construct a function to model a linear relationship between two quantities."],
+  ["KY.MS-ESS2-2", "Science", "8", "Construct an explanation based on evidence for how geoscience processes have changed Earth's surface."],
+  ["KY.SS.8.C.CP.2", "Social Studies", "8", "Analyze how the Constitution and civic principles affect rights and responsibilities."]
+].map(([code, subject, grade, text]) => ({ code, subject, grade, text }));
+
+const standards = Array.isArray(window.BELLRINGER_STANDARDS) && window.BELLRINGER_STANDARDS.length
+  ? window.BELLRINGER_STANDARDS
+  : fallbackStandards;
+
+const els = {};
+
+document.addEventListener("DOMContentLoaded", () => {
+  cacheElements();
+  hydrate();
+  migrateState();
+  seedInitialData();
+  bindEvents();
+  populateSelects();
+  renderAll();
+  setView(state.role === "teacher" && state.teacherAuthenticated ? "teacher" : "student");
+});
+
+function cacheElements() {
+  [
+    "emailInput", "passwordField", "passwordInput", "signInButton", "signOutButton", "signinMessage", "activeUser", "activeRole", "todayPill", "pageTitle",
+    "pageForm", "classSelect", "classList", "newClassButton", "pageName", "joinCode", "subjectSelect", "gradeSelect", "standardSearch", "standardsSelect", "standardsCount", "standardsList", "standardsMenuLabel", "classesMessage",
+    "approvalList",
+    "ringerForm", "dateStart", "dateEnd", "selectRangeButton", "dokSelect", "questionType", "teacherPrompt", "applyToAllButton", "dateSetupList", "questionText", "generateButton",
+    "teacherMessage", "prevMonthButton", "nextMonthButton", "calendarMonthLabel", "teacherCalendar",
+    "selectedStandardsList", "selectedDatesList", "studentDate", "calendarSummary", "assignmentMeta",
+    "studentQuestion", "answerForm", "studentAnswer", "studentFeedback", "gradebookRange", "gradebookDate",
+    "gradebookStats", "gradebookBody"
+  ].forEach((id) => {
+    els[id] = document.getElementById(id);
+  });
+}
+
+function hydrate() {
+  const saved = localStorage.getItem("bellringer-state");
+  if (!saved) return;
+
   try {
-    return normalizeState(JSON.parse(saved));
+    Object.assign(state, JSON.parse(saved));
   } catch {
-    return structuredClone(defaultState);
+    localStorage.removeItem("bellringer-state");
   }
 }
 
-function normalizeState(nextState) {
-  return {
-    ...structuredClone(defaultState),
-    ...nextState,
-    teacherNames: { ...defaultState.teacherNames, ...nextState?.teacherNames },
-    extraStudents: Array.isArray(nextState?.extraStudents) ? nextState.extraStudents : [],
-    archivedStudentIds: Array.isArray(nextState?.archivedStudentIds) ? nextState.archivedStudentIds : [],
-    trips: Array.isArray(nextState?.trips) ? nextState.trips : [],
-    medicalNotes: { ...defaultState.medicalNotes, ...nextState?.medicalNotes },
-    settings: {
-      ...defaultState.settings,
-      ...(nextState?.settings || {}),
-      alertContacts: Array.isArray(nextState?.settings?.alertContacts) ? nextState.settings.alertContacts : []
-    }
-  };
-}
-
-function getAllStudents() {
-  return [...baseStudents, ...(state.extraStudents || [])];
-}
-
-function refreshStudents() {
-  students = getAllStudents();
-}
-
-function isArchivedStudent(studentId) {
-  return state.archivedStudentIds.includes(studentId);
-}
-
-function activeStudents() {
-  return students.filter((student) => !isArchivedStudent(student.id));
-}
-
-function displayStudentName(student) {
-  if (!student) return "Student";
-  if (!state.settings.privacyMode) return student.name;
-  const parts = student.name.trim().split(/\s+/);
-  if (parts.length < 2) return student.name;
-  return `${parts[0]} ${parts.at(-1).slice(0, 1)}.`;
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-function teacherName(teacherOrId) {
-  const teacher = typeof teacherOrId === "string" ? teacherById(teacherOrId) : teacherOrId;
-  if (!teacher) return "";
-  return state.teacherNames[teacher.id]?.trim() || teacher.name || teacher.room;
-}
-
-function savedTeacherName(teacherOrId) {
-  const teacher = typeof teacherOrId === "string" ? teacherById(teacherOrId) : teacherOrId;
-  if (!teacher) return "";
-  return state.teacherNames[teacher.id]?.trim() || teacher.name || "";
-}
-
-function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  if (!firestoreStateRef || isApplyingRemoteState) return;
-  setDoc(firestoreStateRef, {
-    ...state,
-    updatedAt: serverTimestamp()
-  }, { merge: true }).catch((error) => {
-    console.warn("Could not save HallPass state to Firestore. Local fallback is still saved.", error);
-  });
-}
-
-function readLegacyStudentsForMigration() {
-  if (localStorage.getItem(LEGACY_MIGRATION_KEY) === "done") return [];
-  const legacyKeys = [
-    "hallpass-demo-state-v1",
-    "hallpass-demo-state-v2",
-    "hallpass-demo-state-v3"
-  ];
-  const found = [];
-  legacyKeys.forEach((key) => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(key) || "{}");
-      if (!Array.isArray(saved.extraStudents)) return;
-      saved.extraStudents.forEach((student) => {
-        if (!student?.name || !student?.grade) return;
-        found.push({
-          id: `s-migrated-${crypto.randomUUID()}`,
-          name: student.name,
-          grade: String(student.grade),
-          medicalNote: Boolean(student.medicalNote)
-        });
-      });
-    } catch {
-      // Ignore malformed old prototype data.
-    }
-  });
-  return found;
-}
-
-function mergeLegacyStudents() {
-  if (!legacyStudentsToMigrate.length) return false;
-  const existing = new Set((state.extraStudents || []).map((student) => `${student.name.trim().toLowerCase()}|${student.grade}`));
-  const additions = legacyStudentsToMigrate.filter((student) => {
-    const key = `${student.name.trim().toLowerCase()}|${student.grade}`;
-    if (existing.has(key)) return false;
-    existing.add(key);
-    return true;
-  });
-  if (!additions.length) {
-    localStorage.setItem(LEGACY_MIGRATION_KEY, "done");
-    return false;
-  }
-  additions.forEach((student) => {
-    state.extraStudents.push(student);
-    state.medicalNotes[student.id] = Boolean(student.medicalNote);
-  });
-  localStorage.setItem(LEGACY_MIGRATION_KEY, "done");
-  refreshStudents();
-  saveState();
-  console.info(`Migrated ${additions.length} legacy HallPass students into Firestore.`);
-  return true;
-}
-
-function hasFirebaseConfig() {
-  return Boolean(firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.appId);
-}
-
-async function initializeSharedData() {
-  if (!hasFirebaseConfig()) {
-    console.info("HallPass is running in local-only mode. Add Firebase config in firebase-config.js to share data.");
-    return;
-  }
-
-  try {
-    legacyStudentsToMigrate = readLegacyStudentsForMigration();
-    const firebaseApp = initializeApp(firebaseConfig);
-    firestoreDb = getFirestore(firebaseApp);
-    firestoreStateRef = doc(
-      firestoreDb,
-      "schools",
-      firestoreSettings.schoolId,
-      "apps",
-      firestoreSettings.appStateDocument
-    );
-
-    const snapshot = await getDoc(firestoreStateRef);
-    if (!snapshot.exists()) {
-      await setDoc(firestoreStateRef, {
-        ...state,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      });
-    }
-
-    onSnapshot(firestoreStateRef, (remoteSnapshot) => {
-      if (!remoteSnapshot.exists()) return;
-      isApplyingRemoteState = true;
-      state = normalizeState(remoteSnapshot.data());
-      refreshStudents();
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-      isApplyingRemoteState = false;
-      const migrated = mergeLegacyStudents();
-      populateSelects();
-      render();
-      if (migrated) return;
-    }, (error) => {
-      console.warn("Could not subscribe to shared HallPass data. Local fallback is still available.", error);
+function migrateState() {
+  if (!Array.isArray(state.selectedStandardCodes)) state.selectedStandardCodes = [];
+  state.selectedStandardCodes = state.selectedStandardCodes.filter((code) => standards.some((item) => item.code === code));
+  if (state.standardsPickerVersion !== 4) {
+    state.selectedStandardCodes = [];
+    Object.values(state.dateConfigs || {}).forEach((config) => {
+      config.standardCodes = [];
     });
-  } catch (error) {
-    console.warn("Could not initialize Firebase. HallPass is running in local-only mode.", error);
+    state.standardsPickerVersion = 4;
   }
-}
-
-function todayTrips() {
-  const today = new Date().toDateString();
-  return state.trips.filter((trip) => new Date(trip.leftAt).toDateString() === today);
-}
-
-function activeTrips() {
-  return state.trips.filter((trip) => !trip.returnedAt);
-}
-
-function teacherClasses() {
-  return teachers.filter((teacher) => teacher.id !== "t-deb");
-}
-
-function studentsForClass(teacherId, grade) {
-  return activeStudents().filter((student) => student.grade === grade);
-}
-
-function studentById(id) {
-  return students.find((student) => student.id === id);
-}
-
-function studentNameForTrip(trip, options = {}) {
-  const student = studentById(trip.studentId);
-  return options.privateDisplay ? displayStudentName(student) : student?.name || "Student";
-}
-
-function teacherById(id) {
-  return teachers.find((teacher) => teacher.id === id);
-}
-
-function gradeLabel(grade) {
-  return `${grade}th Grade`.replace("5th", "5th").replace("6th", "6th").replace("7th", "7th").replace("8th", "8th");
-}
-
-function formatDestination(trip) {
-  if (trip.destination === "Another Teacher's Room" && trip.destinationTeacherId) {
-    return `${trip.destination}: ${teacherName(trip.destinationTeacherId) || "Teacher"}`;
+  if (!Array.isArray(state.selectedDates) || !state.selectedDates.length) state.selectedDates = [isoToday];
+  state.selectedDates = unique(state.selectedDates).filter((date) => isSchoolDay(date)).sort();
+  if (!state.selectedDates.length) state.selectedDates = [isoToday];
+  if (!state.generatedDrafts) state.generatedDrafts = {};
+  if (!state.dateConfigs || typeof state.dateConfigs !== "object") state.dateConfigs = {};
+  if (!Array.isArray(state.approvedTeachers)) state.approvedTeachers = ["patrick.feltner@knott.kyschools.us"];
+  if (!Array.isArray(state.pendingTeacherApprovals)) state.pendingTeacherApprovals = [];
+  delete state.approvedStudents;
+  delete state.pendingApprovals;
+  state.calendarMonth = actualISODate.slice(0, 7);
+  if (!standards.some((item) => item.grade === state.page.grade)) state.page.grade = "6";
+  if (!Array.isArray(state.classes) || !state.classes.length) {
+    const firstClass = { id: "class-default", ...state.page };
+    state.classes = [firstClass];
+    state.activeClassId = firstClass.id;
   }
-  return trip.destination;
+  if (!state.activeClassId || !state.classes.some((item) => item.id === state.activeClassId)) {
+    state.activeClassId = state.classes[0].id;
+  }
+  const activeClass = state.classes.find((item) => item.id === state.activeClassId);
+  state.page = { name: activeClass.name, code: activeClass.code, subject: activeClass.subject, grade: activeClass.grade };
+  if (!state.ringersByClass || typeof state.ringersByClass !== "object") state.ringersByClass = {};
+  if (!state.ringersByClass[state.activeClassId]) {
+    state.ringersByClass[state.activeClassId] = state.ringers || {};
+  }
+  state.submissions = (state.submissions || []).map((submission) => ({
+    ...submission,
+    classId: submission.classId || state.activeClassId
+  }));
 }
 
-function countTripsForStudent(studentId) {
-  return todayTrips().filter((trip) => trip.studentId === studentId).length;
+function persist() {
+  localStorage.setItem("bellringer-state", JSON.stringify(state));
 }
 
-function totalTimeForStudent(studentId) {
-  const now = Date.now();
-  return todayTrips()
-    .filter((trip) => trip.studentId === studentId)
-    .reduce((total, trip) => total + ((trip.returnedAt || now) - trip.leftAt), 0);
-}
+function seedInitialData() {
+  if (state.activeClassId !== "class-default") return;
+  const ringers = activeRingers();
 
-function elapsedLabel(startMs, endMs = Date.now()) {
-  const totalMinutes = Math.max(0, Math.floor((endMs - startMs) / 60000));
-  if (totalMinutes < 1) return "under 1 min";
-  if (totalMinutes === 1) return "1 min";
-  if (totalMinutes < 60) return `${totalMinutes} min`;
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return `${hours} hr ${minutes} min`;
-}
-
-function minutesLabel(minutes) {
-  const rounded = Math.round(minutes);
-  if (rounded < 1) return "under 1 min";
-  if (rounded === 1) return "1 min";
-  if (rounded < 60) return `${rounded} min`;
-  const hours = Math.floor(rounded / 60);
-  const remainder = rounded % 60;
-  return `${hours} hr ${remainder} min`;
-}
-
-function tripMinutes(trip) {
-  return Math.max(0, ((trip.returnedAt || Date.now()) - trip.leftAt) / 60000);
-}
-
-function dateInputValue(date) {
-  return date.toISOString().slice(0, 10);
-}
-
-function rangeBounds() {
-  const now = new Date();
-  let start = new Date(now);
-  let end = new Date(now);
-
-  if (els.reportRangeSelect.value === "day") {
-    start.setHours(0, 0, 0, 0);
-    end.setHours(23, 59, 59, 999);
-  } else if (els.reportRangeSelect.value === "week") {
-    start.setDate(now.getDate() - now.getDay());
-    start.setHours(0, 0, 0, 0);
-    end.setHours(23, 59, 59, 999);
-  } else if (els.reportRangeSelect.value === "month") {
-    start = new Date(now.getFullYear(), now.getMonth(), 1);
-    end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
-  } else {
-    start = els.reportStartDate.value ? new Date(`${els.reportStartDate.value}T00:00:00`) : new Date(0);
-    end = els.reportEndDate.value ? new Date(`${els.reportEndDate.value}T23:59:59`) : new Date();
+  if (!ringers[isoToday]) {
+    const standard = standards.find((item) => item.code === "KY.6.RI.2");
+    ringers[isoToday] = buildRinger(isoToday, [standard], "2", "KSA-style reading response", ksaPrompt({
+      date: isoToday,
+      subject: "English Language Arts",
+      grade: "6",
+      standards: [standard],
+      dok: "2",
+      questionType: "KSA-style reading response"
+    }));
   }
 
-  return { start, end };
-}
-
-function filteredTrips() {
-  const { start, end } = rangeBounds();
-  const selectedStudent = selectedReportStudentId();
-  return state.trips.filter((trip) => {
-    const leftAt = new Date(trip.leftAt);
-    if (leftAt < start || leftAt > end) return false;
-    if (els.reportDestinationSelect.value !== "all" && trip.destination !== els.reportDestinationSelect.value) return false;
-    if (els.reportTeacherSelect.value !== "all" && trip.teacherId !== els.reportTeacherSelect.value) return false;
-    if (selectedStudent !== "all" && trip.studentId !== selectedStudent) return false;
-    return true;
-  });
-}
-
-function selectedPieTeacherIds() {
-  const selected = Array.from(els.reportPieTeacherChecks.querySelectorAll("input:checked")).map((input) => input.value);
-  return selected.length ? selected : teacherClasses().map((teacher) => teacher.id);
-}
-
-function selectedReportStudentId() {
-  return selectedReportStudentIdValue;
-}
-
-function reportStudentLabel(student) {
-  return `${student.name} - ${gradeLabel(student.grade)}`;
-}
-
-function populateSelects() {
-  els.teacherSelect.innerHTML = teacherClasses()
-    .map((teacher) => `<option value="${teacher.id}">${escapeHtml(teacherName(teacher))}</option>`)
-    .join("");
-  els.teacherGradeSelect.innerHTML = grades.map((grade) => `<option value="${grade}">${gradeLabel(grade)}</option>`).join("");
-  els.addStudentGradeSelect.innerHTML = grades.map((grade) => `<option value="${grade}">${gradeLabel(grade)}</option>`).join("");
-  els.bulkImportGradeSelect.innerHTML = grades.map((grade) => `<option value="${grade}">${gradeLabel(grade)}</option>`).join("");
-  els.destinationSelect.innerHTML = destinations.map((destination) => `<option value="${destination}">${destination}</option>`).join("");
-  els.destinationTeacherSelect.innerHTML = teachers.map((teacher) => `<option value="${teacher.id}">${escapeHtml(teacherName(teacher))} - ${teacher.room}</option>`).join("");
-  els.displayTeacherSelect.innerHTML = teacherClasses()
-    .map((teacher) => `<option value="${teacher.id}">${escapeHtml(teacherName(teacher))}</option>`)
-    .join("");
-  els.displayGradeSelect.innerHTML = grades.map((grade) => `<option value="${grade}">${gradeLabel(grade)}</option>`).join("");
-  els.displayDestinationSelect.innerHTML = destinations.map((destination) => `<option value="${destination}">${destination}</option>`).join("");
-  els.displayDestinationTeacherSelect.innerHTML = teachers.map((teacher) => `<option value="${teacher.id}">${escapeHtml(teacherName(teacher))} - ${teacher.room}</option>`).join("");
-  populateReportOptions();
-  els.teacherSelect.value = state.selectedTeacherId;
-  els.teacherGradeSelect.value = state.selectedTeacherGrade;
-  els.addStudentGradeSelect.value = state.selectedTeacherGrade;
-  els.bulkImportGradeSelect.value = state.selectedTeacherGrade;
-  els.displayTeacherSelect.value = state.selectedDisplayTeacherId;
-  els.displayGradeSelect.value = state.selectedDisplayGrade;
-  populateTeacherStudentSelect();
-  populateDisplayStudentSelect();
-}
-
-function populateReportOptions() {
-  const selectedDestination = els.reportDestinationSelect.value || "all";
-  const selectedTeacher = els.reportTeacherSelect.value || "all";
-  const selectedPieTeachers = new Set(Array.from(els.reportPieTeacherChecks.querySelectorAll("input:checked")).map((input) => input.value));
-
-  els.reportDestinationSelect.innerHTML = [
-    '<option value="all">All destinations</option>',
-    ...destinations.map((destination) => `<option value="${escapeHtml(destination)}">${escapeHtml(destination)}</option>`)
-  ].join("");
-  els.reportTeacherSelect.innerHTML = [
-    '<option value="all">All classes</option>',
-    ...teacherClasses().map((teacher) => `<option value="${teacher.id}">${escapeHtml(teacherName(teacher))}</option>`)
-  ].join("");
-  els.reportPieTeacherChecks.innerHTML = teacherClasses()
-    .map((teacher) => `
-      <label class="check-row">
-        <input type="checkbox" value="${teacher.id}" ${selectedPieTeachers.size && !selectedPieTeachers.has(teacher.id) ? "" : "checked"}>
-        ${escapeHtml(teacherName(teacher))}
-      </label>
-    `)
-    .join("");
-
-  els.reportDestinationSelect.value = [...els.reportDestinationSelect.options].some((option) => option.value === selectedDestination) ? selectedDestination : "all";
-  els.reportTeacherSelect.value = [...els.reportTeacherSelect.options].some((option) => option.value === selectedTeacher) ? selectedTeacher : "all";
-}
-
-function populateTeacherStudentSelect() {
-  const options = studentsForClass(state.selectedTeacherId, state.selectedTeacherGrade)
-    .map((student) => `<option value="${student.id}">${escapeHtml(student.name)}</option>`)
-    .join("");
-  els.studentSelect.innerHTML = options;
-}
-
-function populateDisplayStudentSelect() {
-  const options = studentsForClass(state.selectedDisplayTeacherId, state.selectedDisplayGrade)
-    .map((student) => `<option value="${student.id}">${escapeHtml(student.name)}</option>`)
-    .join("");
-  els.displayStudentSelect.innerHTML = options;
-}
-
-function switchView(viewName) {
-  if (viewName === "display") {
-    teacherUnlocked = false;
-    teacherSubtab = "overview";
-  }
-  els.tabs.forEach((tab) => tab.classList.toggle("active", tab.dataset.view === viewName));
-  Object.entries(els.views).forEach(([name, view]) => view.classList.toggle("active", name === viewName));
-  if (viewName === "teacher" && !teacherUnlocked) {
-    els.teacherCodeInput.value = "";
-    els.teacherCodeMessage.textContent = "";
-    setTimeout(() => els.teacherCodeInput.focus(), 0);
-  }
-  render();
-}
-
-function renderTeacherAccess() {
-  els.teacherLock.classList.toggle("hidden", teacherUnlocked);
-  els.teacherContent.classList.toggle("hidden", !teacherUnlocked);
-}
-
-function canStudentSignOut(studentId, teacherId, wantsOverride) {
-  if (!studentId) return { allowed: false, reason: "Add a student to this class first." };
-  const active = activeTrips();
-  const classOut = active.filter((trip) => trip.teacherId === teacherId);
-  const alreadyOut = active.find((trip) => trip.studentId === studentId);
-  const used = countTripsForStudent(studentId);
-  const hasMedicalNote = Boolean(state.medicalNotes[studentId]);
-
-  if (alreadyOut) return { allowed: false, reason: "You are already signed out." };
-  if (classOut.length >= CLASS_OUT_LIMIT) return { allowed: false, reason: "Two students are already out from this class." };
-  if (used >= DAILY_LIMIT && !hasMedicalNote && !wantsOverride) return { allowed: false, reason: "Daily limit reached. Ask your teacher." };
-  if (used >= DAILY_LIMIT && hasMedicalNote) return { allowed: true, allowedBy: "doctor's note exemption" };
-  if (used >= DAILY_LIMIT && wantsOverride) return { allowed: true, allowedBy: "teacher override" };
-  return { allowed: true, allowedBy: "standard" };
-}
-
-function renderTeacherView() {
-  const teacher = teacherById(state.selectedTeacherId);
-  const active = activeTrips();
-  const classOut = active.filter((trip) => trip.teacherId === teacher.id);
-  const otherOut = active.filter((trip) => trip.teacherId !== teacher.id);
-  const destinationNeedsTeacher = els.destinationSelect.value === "Another Teacher's Room";
-
-  els.teacherTitle.textContent = `${teacherName(teacher)}'s page`;
-  els.teacherSummary.textContent = `${teacher.room} has ${classOut.length} of ${CLASS_OUT_LIMIT} hall passes in use.`;
-  if (document.activeElement !== els.teacherNameInput) {
-    els.teacherNameInput.value = savedTeacherName(teacher);
-  }
-  els.classCapacity.textContent = `${classOut.length} / ${CLASS_OUT_LIMIT} out`;
-  els.outWarning.textContent = classOut.length >= CLASS_OUT_LIMIT ? "Full" : "Open";
-  els.outWarning.style.color = classOut.length >= CLASS_OUT_LIMIT ? "var(--red)" : "var(--green)";
-  els.teacherDestinationField.classList.toggle("hidden", !destinationNeedsTeacher);
-  els.overrideReasonField.classList.toggle("hidden", !els.overrideCheck.checked);
-  els.otherClassesCount.textContent = `${otherOut.length} out`;
-
-  renderStudentInfo();
-  renderOtherClasses(otherOut);
-  renderCurrentOut(classOut, els.currentOutList);
-  renderRosterForTeacher(teacher, state.selectedTeacherGrade);
-  updateTeacherSignoutButton();
-}
-
-function renderStudentInfo() {
-  const studentId = els.studentSelect.value;
-  const student = studentById(studentId);
-  if (!student) {
-    els.selectedStudentInfo.textContent = "No students are assigned to this class.";
-    return;
-  }
-  const used = countTripsForStudent(studentId);
-  const timeOut = totalTimeForStudent(studentId);
-  const hasMedicalNote = Boolean(state.medicalNotes[studentId]);
-  const limitLabel = used >= DAILY_LIMIT ? "limit reached" : `${DAILY_LIMIT - used} left`;
-  els.selectedStudentInfo.innerHTML = `
-    <strong>${escapeHtml(student.name)}</strong>
-    <div class="meta">${gradeLabel(student.grade)} - ${used} sign-outs today, ${elapsedLabel(0, timeOut)} total time out</div>
-    <span class="pill ${used >= DAILY_LIMIT ? "warning" : ""}">${limitLabel}</span>
-    ${hasMedicalNote ? '<span class="pill medical">doctor note on file</span>' : ""}
-  `;
-}
-
-function renderOtherClasses(trips) {
-  if (!trips.length) {
-    els.otherClassesList.classList.add("empty");
-    els.otherClassesList.textContent = "No students are currently out in other classes.";
-    return;
-  }
-  els.otherClassesList.classList.remove("empty");
-  els.otherClassesList.innerHTML = trips
-    .map((trip) => `
-      <article class="status-item">
-        <strong>${escapeHtml(studentById(trip.studentId)?.name || "Student")}</strong>
-        <div class="meta">${escapeHtml(formatDestination(trip))} - ${escapeHtml(teacherName(trip.teacherId))}</div>
-        <span class="pill">${elapsedLabel(trip.leftAt)}</span>
-      </article>
-    `)
-    .join("");
-}
-
-function renderCurrentOut(trips, container) {
-  if (!trips.length) {
-    container.innerHTML = '<p class="empty">No one is signed out from this class.</p>';
-    return;
-  }
-  const alertMinutes = Number(state.settings.longAbsenceMinutes) || LONG_ABSENCE_MINUTES;
-  container.innerHTML = trips
-    .map((trip) => {
-      const minutesOut = tripMinutes(trip);
-      const needsAlert = minutesOut >= alertMinutes;
-      return `
-      <article class="out-card ${needsAlert ? "alert-card" : ""}">
-        <div>
-          <h3>${escapeHtml(studentNameForTrip(trip))}</h3>
-          <p class="meta">${escapeHtml(formatDestination(trip))} - out ${elapsedLabel(trip.leftAt)}</p>
-          ${trip.note ? `<p class="meta">Note: ${escapeHtml(trip.note)}</p>` : ""}
-          <span class="pill">${escapeHtml(trip.allowedBy)}</span>
-          ${needsAlert ? `<span class="pill danger">over ${alertMinutes} min</span>` : ""}
-        </div>
-        <button class="return-button" type="button" data-return-id="${trip.id}">Sign Back In</button>
-      </article>
-    `;
-    })
-    .join("");
-}
-
-function renderRosterForTeacher(teacher, grade) {
-  const roster = studentsForClass(teacher.id, grade);
-  if (!roster.length) {
-    els.todayCounts.innerHTML = `<p class="empty">No students have been added to the shared ${gradeLabel(grade)} roster yet.</p>`;
-    return;
-  }
-  els.todayCounts.innerHTML = roster
-    .map((student) => {
-      const used = countTripsForStudent(student.id);
-      const hasMedicalNote = Boolean(state.medicalNotes[student.id]);
-      const locked = used >= DAILY_LIMIT && !hasMedicalNote;
-      return `
-        <article class="count-row roster-row">
-          <div>
-            <strong>${escapeHtml(student.name)}</strong>
-            <span class="meta">${used}/${DAILY_LIMIT} sign-outs today - ${elapsedLabel(0, totalTimeForStudent(student.id))} total</span>
-          </div>
-          <label class="switch">
-            <input type="checkbox" data-medical-id="${student.id}" ${hasMedicalNote ? "checked" : ""}>
-            Doctor's note
-          </label>
-          <span class="pill ${locked ? "danger" : ""}">${locked ? "locked" : "active"}</span>
-          <button class="delete-button" type="button" data-delete-student-id="${student.id}">Remove</button>
-        </article>
-      `;
-    })
-    .join("");
-}
-
-function renderDisplayView() {
-  const active = activeTrips();
-  const displayTeacher = teacherById(state.selectedDisplayTeacherId);
-  const displayClassOut = active.filter((trip) => trip.teacherId === displayTeacher.id);
-  const destinationNeedsTeacher = els.displayDestinationSelect.value === "Another Teacher's Room";
-
-  els.displayTotalOut.textContent = active.length;
-  els.displayCapacity.textContent = `${displayClassOut.length} / ${CLASS_OUT_LIMIT} out`;
-  els.displayTeacherDestinationField.classList.toggle("hidden", !destinationNeedsTeacher);
-  updateDisplaySignoutButton();
-
-  const fullClasses = teacherClasses()
-    .map((teacher) => ({ teacher, trips: active.filter((trip) => trip.teacherId === teacher.id) }))
-    .filter((item) => item.trips.length >= CLASS_OUT_LIMIT);
-
-  els.capacityAlert.classList.toggle("hidden", !fullClasses.length);
-  els.capacityAlert.innerHTML = fullClasses.length
-    ? `<strong>Capacity reached:</strong> ${fullClasses.map((item) => escapeHtml(teacherName(item.teacher))).join(", ")} must wait for someone to sign back in.`
-    : "";
-
-  els.displayCards.innerHTML = teacherClasses()
-    .map((teacher) => {
-      const trips = active.filter((trip) => trip.teacherId === teacher.id);
-      const alertMinutes = Number(state.settings.longAbsenceMinutes) || LONG_ABSENCE_MINUTES;
-      return `
-        <article class="display-card">
-          <header>
-            <div>
-              <h2>${escapeHtml(teacherName(teacher))}</h2>
-              <span class="meta">${teacher.room}</span>
-            </div>
-            <span class="pill ${trips.length >= CLASS_OUT_LIMIT ? "danger" : ""}">${trips.length}/${CLASS_OUT_LIMIT}</span>
-          </header>
-          ${
-            trips.length
-              ? `<ul>${trips.map((trip) => `
-                  <li class="${tripMinutes(trip) >= alertMinutes ? "alert-list-item" : ""}">
-                    <strong>${escapeHtml(studentNameForTrip(trip, { privateDisplay: true }))}</strong>
-                    <div class="meta">${gradeLabel(studentById(trip.studentId)?.grade || "")} - ${escapeHtml(formatDestination(trip))}</div>
-                    <div class="timer">${elapsedLabel(trip.leftAt)}</div>
-                    ${tripMinutes(trip) >= alertMinutes ? `<div class="meta danger-text">Please check in with the teacher.</div>` : ""}
-                    <button class="return-button" type="button" data-return-id="${trip.id}">Sign Back In</button>
-                  </li>
-                `).join("")}</ul>`
-              : '<p class="empty">All students are in class.</p>'
-          }
-        </article>
-      `;
-    })
-    .join("");
-}
-
-function renderTeacherSubtabs() {
-  els.teacherSubtabs.forEach((tab) => tab.classList.toggle("active", tab.dataset.teacherTab === teacherSubtab));
-  els.teacherOverviewPanels.forEach((panel) => panel.classList.toggle("hidden", teacherSubtab !== "overview"));
-  els.dataContent.classList.toggle("hidden", teacherSubtab !== "data");
-  els.settingsContent.classList.toggle("hidden", teacherSubtab !== "settings");
-}
-
-function renderDataCenter() {
-  if (!teacherUnlocked || teacherSubtab !== "data") return;
-  populateReportOptions();
-  renderStudentSearchResults();
-  renderSelectedStudentBanner();
-  const isCustom = els.reportRangeSelect.value === "custom";
-  els.reportStartField.classList.toggle("hidden", !isCustom);
-  els.reportEndField.classList.toggle("hidden", !isCustom);
-  if (!els.reportStartDate.value) els.reportStartDate.value = dateInputValue(new Date());
-  if (!els.reportEndDate.value) els.reportEndDate.value = dateInputValue(new Date());
-
-  const trips = filteredTrips();
-  const totalMinutes = trips.reduce((sum, trip) => sum + tripMinutes(trip), 0);
-  const averageMinutes = trips.length ? totalMinutes / trips.length : 0;
-  const uniqueStudents = new Set(trips.map((trip) => trip.studentId)).size;
-
-  els.reportSummary.innerHTML = `
-    <article class="summary-card">
-      <span>Total trips</span>
-      <strong>${trips.length}</strong>
-    </article>
-    <article class="summary-card">
-      <span>Students</span>
-      <strong>${uniqueStudents}</strong>
-    </article>
-    <article class="summary-card">
-      <span>Total time out</span>
-      <strong>${minutesLabel(totalMinutes)}</strong>
-    </article>
-    <article class="summary-card">
-      <span>Average trip</span>
-      <strong>${minutesLabel(averageMinutes)}</strong>
-    </article>
-  `;
-
-  renderDestinationBreakdown(trips);
-  renderStudentPie(trips);
-  renderTripTable(trips);
-}
-
-function renderSettings() {
-  if (!teacherUnlocked || teacherSubtab !== "settings") return;
-  els.privacyModeCheck.checked = Boolean(state.settings.privacyMode);
-  if (document.activeElement !== els.alertMinutesInput) {
-    els.alertMinutesInput.value = Number(state.settings.longAbsenceMinutes) || LONG_ABSENCE_MINUTES;
-  }
-  if (document.activeElement !== els.alertContactsInput) {
-    els.alertContactsInput.value = (state.settings.alertContacts || []).join("\n");
-  }
-  if (!els.bulkImportGradeSelect.value) {
-    els.bulkImportGradeSelect.value = state.selectedTeacherGrade;
-  }
-}
-
-function renderStudentSearchResults() {
-  const query = els.reportStudentSearch.value.trim().toLowerCase();
-  if (!query) {
-    els.reportStudentResults.classList.add("hidden");
-    els.reportStudentResults.innerHTML = "";
-    return;
-  }
-  const matches = activeStudents()
-    .filter((student) => student.name.toLowerCase().includes(query))
-    .sort((a, b) => a.grade.localeCompare(b.grade) || a.name.localeCompare(b.name))
-    .slice(0, 8);
-
-  if (!matches.length) {
-    els.reportStudentResults.classList.remove("hidden");
-    els.reportStudentResults.innerHTML = '<p class="empty">No matching students.</p>';
-    return;
+  const previous = previousSchoolDay(isoToday);
+  if (!ringers[previous]) {
+    const standard = standards.find((item) => item.code === "KY.6.NS.1");
+    ringers[previous] = buildRinger(previous, [standard], "2", "KSA-style math problem", ksaPrompt({
+      date: previous,
+      subject: "Mathematics",
+      grade: "6",
+      standards: [standard],
+      dok: "2",
+      questionType: "KSA-style math problem"
+    }));
   }
 
-  els.reportStudentResults.classList.remove("hidden");
-  els.reportStudentResults.innerHTML = matches
-    .map((student) => `
-      <button class="student-result" type="button" data-report-student-id="${student.id}">
-        <strong>${escapeHtml(student.name)}</strong>
-        <span>${gradeLabel(student.grade)}</span>
-      </button>
-    `)
-    .join("");
-}
-
-function renderSelectedStudentBanner() {
-  const student = selectedReportStudentIdValue === "all" ? null : studentById(selectedReportStudentIdValue);
-  els.selectedStudentBanner.classList.toggle("hidden", !student);
-  els.selectedStudentBanner.innerHTML = student
-    ? `<span>Selected student</span><strong>${escapeHtml(student.name)}</strong><button type="button" data-clear-report-student>Clear</button>`
-    : "";
-}
-
-function renderDestinationBreakdown(trips) {
-  const byDestination = new Map();
-  trips.forEach((trip) => {
-    const key = trip.destination;
-    const current = byDestination.get(key) || { count: 0, minutes: 0 };
-    current.count += 1;
-    current.minutes += tripMinutes(trip);
-    byDestination.set(key, current);
-  });
-
-  els.destinationBreakdownLabel.textContent = els.reportDestinationSelect.value === "all"
-    ? "All destinations"
-    : els.reportDestinationSelect.value;
-
-  if (!byDestination.size) {
-    els.destinationBreakdown.innerHTML = '<p class="empty">No trips match these filters.</p>';
-    return;
-  }
-
-  els.destinationBreakdown.innerHTML = Array.from(byDestination.entries())
-    .sort((a, b) => b[1].count - a[1].count)
-    .map(([destination, item]) => `
-      <article class="status-item">
-        <strong>${escapeHtml(destination)}</strong>
-        <div class="meta">${item.count} trips - ${minutesLabel(item.minutes)} total</div>
-        <span class="pill">${minutesLabel(item.minutes / item.count)} avg</span>
-      </article>
-    `)
-    .join("");
-}
-
-function renderStudentPie(trips) {
-  const studentId = selectedReportStudentId();
-  if (studentId === "all") {
-    els.studentPieLabel.textContent = "Choose a student";
-    els.studentPieChart.innerHTML = '<p class="empty">Select one student to see their time-out percentage.</p>';
-    return;
-  }
-
-  const student = studentById(studentId);
-  const teacherIds = selectedPieTeacherIds();
-  const studentTrips = trips.filter((trip) => trip.studentId === studentId && teacherIds.includes(trip.teacherId));
-  const minutesOut = studentTrips.reduce((sum, trip) => sum + tripMinutes(trip), 0);
-  const possibleMinutes = els.reportScopeSelect.value === "period" ? CLASS_PERIOD_MINUTES : SCHOOL_DAY_MINUTES;
-  const cappedPercent = Math.min(100, possibleMinutes ? (minutesOut / possibleMinutes) * 100 : 0);
-  const dash = `${cappedPercent} ${100 - cappedPercent}`;
-
-  els.studentPieLabel.textContent = student ? student.name : "Selected student";
-  els.studentPieChart.innerHTML = `
-    <svg viewBox="0 0 42 42" role="img" aria-label="${Math.round(cappedPercent)} percent out of class">
-      <circle class="pie-bg" cx="21" cy="21" r="15.915"></circle>
-      <circle class="pie-slice" cx="21" cy="21" r="15.915" stroke-dasharray="${dash}" stroke-dashoffset="25"></circle>
-      <text x="21" y="20" text-anchor="middle">${Math.round(cappedPercent)}%</text>
-      <text x="21" y="25" text-anchor="middle">out</text>
-    </svg>
-    <div>
-      <strong>${minutesLabel(minutesOut)}</strong>
-      <span class="meta">out of ${minutesLabel(possibleMinutes)} ${els.reportScopeSelect.value === "period" ? "class period" : "school day"}</span>
-    </div>
-    <div class="teacher-compare">
-      ${renderTeacherComparison(studentTrips)}
-    </div>
-  `;
-}
-
-function renderTeacherComparison(studentTrips) {
-  const selectedIds = selectedPieTeacherIds();
-  return selectedIds
-    .map((teacherId) => {
-      const teacherTrips = studentTrips.filter((trip) => trip.teacherId === teacherId);
-      const minutes = teacherTrips.reduce((sum, trip) => sum + tripMinutes(trip), 0);
-      return `
-        <article class="compare-row">
-          <strong>${escapeHtml(teacherName(teacherId))}</strong>
-          <span>${teacherTrips.length} trips</span>
-          <span>${minutesLabel(minutes)}</span>
-        </article>
-      `;
-    })
-    .join("");
-}
-
-function renderTripTable(trips) {
-  els.tripCountLabel.textContent = `${trips.length} ${trips.length === 1 ? "trip" : "trips"}`;
-  if (!trips.length) {
-    els.tripTable.innerHTML = '<p class="empty">No trip details match these filters.</p>';
-    return;
-  }
-  els.tripTable.innerHTML = `
-    <div class="trip-row trip-header">
-      <span>Student</span>
-      <span>Class</span>
-      <span>Destination</span>
-      <span>Date</span>
-      <span>Time gone</span>
-      <span>Note</span>
-    </div>
-    ${trips.map((trip) => {
-      const student = studentById(trip.studentId);
-      return `
-        <div class="trip-row">
-          <span>${escapeHtml(student?.name || "Student")}</span>
-          <span>${escapeHtml(teacherName(trip.teacherId))}</span>
-          <span>${escapeHtml(formatDestination(trip))}</span>
-          <span>${new Date(trip.leftAt).toLocaleDateString()}</span>
-          <span>${minutesLabel(tripMinutes(trip))}</span>
-          <span>${escapeHtml(trip.note || trip.overrideReason || "")}</span>
-        </div>
-      `;
-    }).join("")}
-  `;
-}
-
-function updateTeacherSignoutButton() {
-  const result = canStudentSignOut(els.studentSelect.value, state.selectedTeacherId, els.overrideCheck.checked);
-  els.signoutButton.disabled = !result.allowed;
-  els.signoutMessage.textContent = result.allowed ? `Allowed by ${result.allowedBy}.` : result.reason;
-}
-
-function updateDisplaySignoutButton() {
-  const teacher = teacherById(state.selectedDisplayTeacherId);
-  const result = canStudentSignOut(els.displayStudentSelect.value, teacher.id, false);
-  els.displaySignoutButton.disabled = !result.allowed;
-  els.displaySignoutMessage.textContent = result.allowed ? "Ready to sign out." : result.reason;
-}
-
-function createTrip({ studentId, teacherId, destination, destinationTeacherId, allowedBy, overrideReason = "", note = "" }) {
-  state.trips.unshift({
-    id: crypto.randomUUID(),
-    studentId,
-    teacherId,
-    destination,
-    destinationTeacherId,
-    leftAt: Date.now(),
-    returnedAt: null,
-    allowedBy,
-    overrideReason,
-    note
-  });
-  saveState();
-}
-
-function teacherSignOut(event) {
-  event.preventDefault();
-  const studentId = els.studentSelect.value;
-  const destination = els.destinationSelect.value;
-  const wantsOverride = els.overrideCheck.checked;
-  const check = canStudentSignOut(studentId, state.selectedTeacherId, wantsOverride);
-
-  if (!check.allowed) {
-    els.signoutMessage.textContent = check.reason;
-    return;
-  }
-  if (wantsOverride && !els.overrideReason.value.trim()) {
-    els.signoutMessage.textContent = "Add an override reason before signing out.";
-    els.overrideReason.focus();
-    return;
-  }
-
-  createTrip({
-    studentId,
-    teacherId: state.selectedTeacherId,
-    destination,
-    destinationTeacherId: destination === "Another Teacher's Room" ? els.destinationTeacherSelect.value : "",
-    allowedBy: check.allowedBy,
-    overrideReason: wantsOverride ? els.overrideReason.value.trim() : "",
-    note: els.teacherTripNote.value.trim()
-  });
-  els.overrideCheck.checked = false;
-  els.overrideReason.value = "";
-  els.teacherTripNote.value = "";
-  render();
-}
-
-function displaySignOut(event) {
-  event.preventDefault();
-  const teacher = teacherById(state.selectedDisplayTeacherId);
-  const studentId = els.displayStudentSelect.value;
-  const destination = els.displayDestinationSelect.value;
-  const check = canStudentSignOut(studentId, teacher.id, false);
-
-  if (!check.allowed) {
-    els.displaySignoutMessage.textContent = check.reason;
-    return;
-  }
-
-  createTrip({
-    studentId,
-    teacherId: teacher.id,
-    destination,
-    destinationTeacherId: destination === "Another Teacher's Room" ? els.displayDestinationTeacherSelect.value : "",
-    allowedBy: check.allowedBy
-  });
-  render();
-}
-
-function returnStudent(tripId) {
-  state.trips = state.trips.map((trip) => (
-    trip.id === tripId ? { ...trip, returnedAt: Date.now() } : trip
-  ));
-  saveState();
-  render();
-}
-
-function deleteStudent(studentId) {
-  const student = studentById(studentId);
-  if (!student) return;
-  if (!state.archivedStudentIds.includes(studentId)) {
-    state.archivedStudentIds.push(studentId);
-  }
-  refreshStudents();
-  saveState();
-  populateTeacherStudentSelect();
-  populateDisplayStudentSelect();
-  els.manageMessage.textContent = `${student.name} removed from the active roster. Their history is still in Data Center.`;
-  render();
-}
-
-function resetDay() {
-  const today = new Date().toDateString();
-  state.trips = state.trips.filter((trip) => new Date(trip.leftAt).toDateString() !== today);
-  refreshStudents();
-  saveState();
-  populateSelects();
-  render();
-}
-
-function unlockTeacherPage(event) {
-  event.preventDefault();
-  if (els.teacherCodeInput.value.trim() !== TEACHER_CODE) {
-    els.teacherCodeMessage.textContent = "Incorrect code.";
-    els.teacherCodeInput.select();
-    return;
-  }
-  teacherUnlocked = true;
-  els.teacherCodeMessage.textContent = "";
-  render();
-}
-
-function saveTeacherName(event) {
-  event.preventDefault();
-  const teacher = teacherById(state.selectedTeacherId);
-  const nextName = els.teacherNameInput.value.trim();
-  if (!nextName) {
-    els.manageMessage.textContent = "Teacher name cannot be blank.";
-    return;
-  }
-  state.teacherNames[teacher.id] = nextName;
-  saveState();
-  populateSelects();
-  els.teacherSelect.value = teacher.id;
-  els.manageMessage.textContent = "Teacher name saved.";
-  render();
-}
-
-function addStudent(event) {
-  event.preventDefault();
-  const teacher = teacherById(state.selectedTeacherId);
-  const grade = els.addStudentGradeSelect.value;
-  const name = els.newStudentNameInput.value.trim();
-  if (!name) {
-    els.manageMessage.textContent = "Enter a student name first.";
-    return;
-  }
-  const newStudent = {
-    id: `s-custom-${crypto.randomUUID()}`,
-    name,
-    grade,
-    medicalNote: false
-  };
-  state.extraStudents.push(newStudent);
-  state.medicalNotes[newStudent.id] = false;
-  state.selectedTeacherGrade = grade;
-  refreshStudents();
-  saveState();
-  populateSelects();
-  els.teacherSelect.value = teacher.id;
-  els.teacherGradeSelect.value = grade;
-  els.studentSelect.value = newStudent.id;
-  if (state.selectedDisplayGrade === grade) {
-    els.displayStudentSelect.value = newStudent.id;
-  }
-  els.newStudentNameInput.value = "";
-  els.manageMessage.textContent = `${name} added to ${gradeLabel(grade)}.`;
-  render();
-}
-
-function saveSettings() {
-  const minutes = Math.max(1, Math.min(60, Number(els.alertMinutesInput.value) || LONG_ABSENCE_MINUTES));
-  state.settings = {
-    ...state.settings,
-    privacyMode: els.privacyModeCheck.checked,
-    longAbsenceMinutes: minutes,
-    alertContacts: els.alertContactsInput.value
-      .split(/\r?\n/)
-      .map((contact) => contact.trim())
-      .filter(Boolean)
-  };
-  saveState();
-  els.settingsMessage.textContent = "Settings saved.";
-  render();
-}
-
-function bulkImportStudents() {
-  const grade = els.bulkImportGradeSelect.value;
-  const names = els.bulkStudentInput.value
-    .split(/\r?\n/)
-    .map((name) => name.trim())
-    .filter(Boolean);
-
-  if (!names.length) {
-    els.bulkImportMessage.textContent = "Paste at least one student name first.";
-    return;
-  }
-
-  const existing = new Set(activeStudents().map((student) => `${student.name.trim().toLowerCase()}|${student.grade}`));
-  const additions = [];
-  names.forEach((name) => {
-    const key = `${name.toLowerCase()}|${grade}`;
-    if (existing.has(key)) return;
-    existing.add(key);
-    additions.push({
-      id: `s-custom-${crypto.randomUUID()}`,
-      name,
-      grade,
-      medicalNote: false
-    });
-  });
-
-  additions.forEach((student) => {
-    state.extraStudents.push(student);
-    state.medicalNotes[student.id] = false;
-  });
-  state.selectedTeacherGrade = grade;
-  refreshStudents();
-  saveState();
-  populateSelects();
-  els.bulkStudentInput.value = "";
-  els.bulkImportMessage.textContent = additions.length
-    ? `${additions.length} students imported to ${gradeLabel(grade)}.`
-    : "Those students were already on the active roster.";
-  render();
-}
-
-function csvEscape(value) {
-  const text = String(value ?? "");
-  return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
-}
-
-function downloadCsv(filename, rows) {
-  const csv = rows.map((row) => row.map(csvEscape).join(",")).join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
-function exportFilteredTrips() {
-  const rows = [[
-    "Student",
-    "Grade",
-    "Class",
-    "Destination",
-    "Date",
-    "Left",
-    "Returned",
-    "Minutes",
-    "Allowed By",
-    "Note"
-  ]];
-  filteredTrips().forEach((trip) => {
-    const student = studentById(trip.studentId);
-    rows.push([
-      student?.name || "Student",
-      student?.grade || "",
-      teacherName(trip.teacherId),
-      formatDestination(trip),
-      new Date(trip.leftAt).toLocaleDateString(),
-      new Date(trip.leftAt).toLocaleTimeString(),
-      trip.returnedAt ? new Date(trip.returnedAt).toLocaleTimeString() : "Still out",
-      Math.round(tripMinutes(trip)),
-      trip.allowedBy,
-      trip.note || trip.overrideReason || ""
-    ]);
-  });
-  downloadCsv(`hallpass-trips-${dateInputValue(new Date())}.csv`, rows);
-}
-
-function downloadRosterCsv() {
-  const rows = [["Name", "Grade", "Doctor Note", "Active"]];
-  students
-    .slice()
-    .sort((a, b) => a.grade.localeCompare(b.grade) || a.name.localeCompare(b.name))
-    .forEach((student) => {
-      rows.push([
-        student.name,
-        gradeLabel(student.grade),
-        state.medicalNotes[student.id] ? "Yes" : "No",
-        isArchivedStudent(student.id) ? "No" : "Yes"
-      ]);
-    });
-  downloadCsv(`hallpass-roster-${dateInputValue(new Date())}.csv`, rows);
+  persist();
 }
 
 function bindEvents() {
-  els.tabs.forEach((tab) => tab.addEventListener("click", () => switchView(tab.dataset.view)));
-  els.teacherSubtabs.forEach((tab) => tab.addEventListener("click", () => {
-    teacherSubtab = tab.dataset.teacherTab;
-    render();
+  document.querySelectorAll("[data-role]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (state.role !== button.dataset.role) {
+        state.email = "";
+        state.teacherAuthenticated = false;
+      }
+      state.role = button.dataset.role;
+      renderAll();
+      setView("student");
+    });
+  });
+
+  document.querySelectorAll("[data-view]").forEach((button) => {
+    button.addEventListener("click", () => setView(button.dataset.view));
+  });
+
+  els.signInButton.addEventListener("click", signIn);
+  if (els.signOutButton) els.signOutButton.addEventListener("click", signOut);
+  if (els.classSelect) els.classSelect.addEventListener("change", () => switchClass(els.classSelect.value));
+  if (els.newClassButton) els.newClassButton.addEventListener("click", createNewClass);
+  els.standardSearch.addEventListener("input", renderStandards);
+  if (els.standardsSelect) els.standardsSelect.addEventListener("change", handleStandardsSelectChange);
+  els.studentDate.addEventListener("change", renderStudentAssignment);
+  els.gradebookRange.addEventListener("change", renderGradebook);
+  els.gradebookDate.addEventListener("change", renderGradebook);
+  els.dokSelect.addEventListener("change", invalidateSelectedDrafts);
+  els.questionType.addEventListener("change", invalidateSelectedDrafts);
+  els.teacherPrompt.addEventListener("input", invalidateSelectedDrafts);
+  els.applyToAllButton.addEventListener("click", applyWeeklySetupToAllDates);
+  els.dateSetupList.addEventListener("input", handleDateConfigChange);
+  els.dateSetupList.addEventListener("change", handleDateConfigChange);
+  els.generateButton.addEventListener("click", generateQuestions);
+  els.ringerForm.addEventListener("submit", publishRingers);
+  els.answerForm.addEventListener("submit", submitAnswer);
+  els.prevMonthButton.addEventListener("click", () => moveCalendar(-1));
+  els.nextMonthButton.addEventListener("click", () => moveCalendar(1));
+
+  els.selectRangeButton.addEventListener("click", selectDateRange);
+
+  els.pageForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (!requireTeacherAccess()) return;
+    state.page.name = els.pageName.value.trim() || state.page.name;
+    state.page.code = els.joinCode.value.trim() || state.page.code;
+    state.page.subject = els.subjectSelect.value;
+    state.page.grade = els.gradeSelect.value;
+    saveActiveClassRecord();
+    resetDateStandardsForClass();
+    setMessage(els.classesMessage, "Class saved. It is ready to use in Teacher Studio.", "teacher-ok");
+    persist();
+    renderAll();
+  });
+
+  els.subjectSelect.addEventListener("change", () => {
+    state.page.subject = els.subjectSelect.value;
+    resetDateStandardsForClass();
+    saveActiveClassRecord();
+    invalidateSelectedDrafts();
+    persist();
+    renderStandards();
+    renderDateSetupList();
+  });
+
+  els.gradeSelect.addEventListener("change", () => {
+    state.page.grade = els.gradeSelect.value;
+    resetDateStandardsForClass();
+    saveActiveClassRecord();
+    invalidateSelectedDrafts();
+    persist();
+    renderStandards();
+    renderDateSetupList();
+  });
+}
+
+function populateSelects() {
+  const subjects = unique(standards.map((item) => item.subject));
+  const grades = ["K", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]
+    .filter((grade) => standards.some((item) => item.grade === grade));
+
+  els.subjectSelect.innerHTML = subjects.map((subject) => `<option>${subject}</option>`).join("");
+  els.gradeSelect.innerHTML = grades.map((grade) => `<option>${grade}</option>`).join("");
+  els.subjectSelect.value = state.page.subject;
+  els.gradeSelect.value = state.page.grade;
+}
+
+function renderAll() {
+  document.querySelectorAll("[data-role]").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.role === state.role);
+  });
+
+  els.todayPill.textContent = actualISODate === isoToday
+    ? `School day: ${formatLongDate(isoToday)}`
+    : `Latest school day: ${formatLongDate(isoToday)}`;
+  els.activeUser.textContent = state.email || "Not signed in";
+  els.activeRole.textContent = state.email
+    ? state.teacherAuthenticated ? "Teacher mode verified" : `${capitalize(state.role)} mode`
+    : "Choose a role to begin";
+  if (els.signOutButton) els.signOutButton.hidden = !state.email;
+  els.passwordField.hidden = state.role !== "teacher";
+  renderClassSelect();
+  renderClassList();
+  els.pageName.value = state.page.name;
+  els.joinCode.value = state.page.code;
+  els.subjectSelect.value = state.page.subject;
+  els.gradeSelect.value = state.page.grade;
+  els.studentDate.max = isoToday;
+  els.gradebookDate.max = isoToday;
+  els.dateStart.value = state.selectedDates[0] || isoToday;
+  els.dateEnd.value = state.selectedDates[state.selectedDates.length - 1] || isoToday;
+  els.studentDate.value ||= isoToday;
+  els.gradebookDate.value ||= isoToday;
+
+  renderStandards();
+  renderApprovals();
+  renderTeacherCalendar();
+  renderSelectedSummaries();
+  renderDateSetupList();
+  renderDraftPreview();
+  renderStudentAssignment();
+  renderGradebook();
+}
+
+function setView(viewName) {
+  if (!canOpenView(viewName)) {
+    setMessage(els.signinMessage, "Teacher Studio and Gradebook require a teacher password.", "teacher-error");
+    viewName = "student";
+  }
+
+  document.querySelectorAll("[data-view]").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.view === viewName);
+  });
+
+  document.querySelectorAll(".view-panel").forEach((panel) => panel.classList.remove("is-visible"));
+  document.getElementById(`${viewName}View`).classList.add("is-visible");
+  els.pageTitle.textContent = {
+    teacher: "Teacher Studio",
+    classes: "Classes",
+    student: "Student Bell",
+    gradebook: "Gradebook"
+  }[viewName];
+}
+
+function signIn() {
+  const email = els.emailInput.value.trim().toLowerCase();
+  const isSchoolEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && !email.endsWith("@gmail.com") && !email.endsWith("@yahoo.com");
+
+  if (!isSchoolEmail) {
+    setMessage(els.signinMessage, "Use a school email address to continue.", "teacher-error");
+    return;
+  }
+
+  if (state.role === "teacher" && !state.approvedTeachers.includes(email)) {
+    requestTeacherApproval(email);
+    state.email = "";
+    state.teacherAuthenticated = false;
+    setMessage(els.signinMessage, "Teacher account request sent for approval.", "teacher-ok");
+    persist();
+    renderAll();
+    return;
+  }
+
+  if (state.role === "teacher" && !isValidTeacherLogin(email, els.passwordInput.value)) {
+    state.email = "";
+    state.teacherAuthenticated = false;
+    setMessage(els.signinMessage, "That teacher email and password do not match.", "teacher-error");
+    renderAll();
+    return;
+  }
+
+  state.email = email;
+  state.teacherAuthenticated = state.role === "teacher";
+
+  if (state.role === "student") {
+    if (!state.students.some((student) => student.email === email)) {
+      state.students.push({ name: nameFromEmail(email), email });
+    }
+  }
+
+  setMessage(els.signinMessage, `Welcome, ${nameFromEmail(email)}.`, "teacher-ok");
+  persist();
+  renderAll();
+  setView(state.role === "teacher" ? "teacher" : "student");
+}
+
+function signOut() {
+  state.email = "";
+  state.teacherAuthenticated = false;
+  els.passwordInput.value = "";
+  persist();
+  renderAll();
+  setView("student");
+  setMessage(els.signinMessage, "You have been signed out.", "teacher-ok");
+}
+
+function activeRingers() {
+  if (!state.ringersByClass || typeof state.ringersByClass !== "object") state.ringersByClass = {};
+  if (!state.ringersByClass[state.activeClassId]) state.ringersByClass[state.activeClassId] = {};
+  return state.ringersByClass[state.activeClassId];
+}
+
+function renderClassSelect() {
+  if (!els.classSelect) return;
+  els.classSelect.innerHTML = state.classes
+    .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} — Grade ${escapeHtml(item.grade)} ${escapeHtml(item.subject)}</option>`)
+    .join("");
+  els.classSelect.value = state.activeClassId;
+}
+
+function renderClassList() {
+  if (!els.classList) return;
+  els.classList.innerHTML = state.classes.map((item) => `
+    <button class="class-list-item ${item.id === state.activeClassId ? "is-active" : ""}" type="button" data-class-id="${escapeHtml(item.id)}">
+      <strong>${escapeHtml(item.name)}</strong>
+      <span>${escapeHtml(item.subject)} · Grade ${escapeHtml(item.grade)} · ${escapeHtml(item.code)}</span>
+    </button>
+  `).join("");
+  els.classList.querySelectorAll("[data-class-id]").forEach((button) => {
+    button.addEventListener("click", () => switchClass(button.dataset.classId));
+  });
+}
+
+function saveActiveClassRecord() {
+  const current = state.classes.find((item) => item.id === state.activeClassId);
+  if (!current) return;
+  Object.assign(current, {
+    name: state.page.name,
+    code: state.page.code,
+    subject: state.page.subject,
+    grade: state.page.grade
+  });
+}
+
+function resetPlannerForClass() {
+  state.selectedStandardCodes = [];
+  state.selectedDates = [isoToday];
+  state.dateConfigs = {};
+  state.generatedDrafts = {};
+  state.calendarMonth = isoToday.slice(0, 7);
+  if (els.standardSearch) els.standardSearch.value = "";
+}
+
+function switchClass(classId) {
+  if (!classId || classId === state.activeClassId) return;
+  saveActiveClassRecord();
+  const nextClass = state.classes.find((item) => item.id === classId);
+  if (!nextClass) return;
+  state.activeClassId = nextClass.id;
+  state.page = {
+    name: nextClass.name,
+    code: nextClass.code,
+    subject: nextClass.subject,
+    grade: nextClass.grade
+  };
+  activeRingers();
+  resetPlannerForClass();
+  persist();
+  renderAll();
+  setMessage(els.teacherMessage, `${nextClass.name} is now active.`, "teacher-ok");
+}
+
+function createNewClass() {
+  if (!requireTeacherAccess()) return;
+  saveActiveClassRecord();
+  const number = state.classes.length + 1;
+  const newClass = {
+    id: `class-${Date.now()}`,
+    name: `New Class ${number}`,
+    code: `CLASS-${String(Date.now()).slice(-4)}`,
+    subject: state.page.subject,
+    grade: state.page.grade
+  };
+  state.classes.push(newClass);
+  state.activeClassId = newClass.id;
+  state.page = { name: newClass.name, code: newClass.code, subject: newClass.subject, grade: newClass.grade };
+  state.ringersByClass[newClass.id] = {};
+  resetPlannerForClass();
+  persist();
+  renderAll();
+  setView("classes");
+  setMessage(els.classesMessage, "New class created. Add its name, subject, and grade, then click Save class.", "teacher-ok");
+  els.pageName.focus();
+  els.pageName.select();
+}
+
+function renderStandards() {
+  const filtered = filteredStandards();
+  const available = standardsForActiveClass();
+  const optionHtml = filtered
+    .map((standard) => `
+      <option value="${standard.code}" ${state.selectedStandardCodes.includes(standard.code) ? "selected" : ""}>
+        ${standard.code} - ${standard.text}
+      </option>
+    `)
+    .join("");
+  if (els.standardsSelect) {
+    els.standardsSelect.innerHTML = optionHtml;
+  }
+  if (els.standardsCount) {
+    const term = els.standardSearch ? els.standardSearch.value.trim() : "";
+    els.standardsCount.textContent = term
+      ? `Showing ${filtered.length} of ${available.length} standards for ${state.page.grade} ${state.page.subject}.`
+      : `Showing all ${available.length} standards for ${state.page.grade} ${state.page.subject}.`;
+  }
+
+  const html = filtered
+    .map((standard) => {
+      const active = state.selectedStandardCodes.includes(standard.code);
+      return `
+        <label class="standard-option ${active ? "is-selected" : ""}">
+          <input type="checkbox" data-standard="${standard.code}" ${active ? "checked" : ""}>
+          <span>
+            <strong>${standard.code}</strong>
+            <small>${standard.text}</small>
+          </span>
+        </label>
+      `;
+    })
+    .join("");
+
+  els.standardsList.innerHTML = html || "<p>No standards match this search for the active class.</p>";
+  els.standardsList.querySelectorAll("[data-standard]").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => toggleStandard(checkbox.dataset.standard, checkbox.checked));
+  });
+  if (els.standardsMenuLabel) {
+    const count = state.selectedStandardCodes.length;
+    els.standardsMenuLabel.textContent = `Select Kentucky standards (${count} selected)`;
+  }
+  renderSelectedSummaries();
+}
+
+function handleStandardsSelectChange() {
+  if (!requireTeacherAccess()) return;
+  const selectedInDropdown = Array.from(els.standardsSelect.selectedOptions).map((option) => option.value);
+  const visibleCodes = filteredStandards().map((standard) => standard.code);
+  const hiddenSelected = state.selectedStandardCodes.filter((code) => !visibleCodes.includes(code));
+  state.selectedStandardCodes = unique([...hiddenSelected, ...selectedInDropdown]);
+  invalidateSelectedDrafts();
+  persist();
+  renderStandards();
+  renderDraftPreview();
+}
+
+function renderApprovals() {
+  if (!els.approvalList) return;
+
+  if (!state.pendingTeacherApprovals.length) {
+    els.approvalList.innerHTML = `<p class="empty-note">No pending teacher account requests.</p>`;
+    return;
+  }
+
+  els.approvalList.innerHTML = state.pendingTeacherApprovals.map((request) => `
+    <div class="approval-row">
+      <div>
+        <strong>${nameFromEmail(request.email)}</strong>
+        <span>${request.email}</span>
+      </div>
+      <button class="secondary-button" type="button" data-approve-teacher="${request.email}">Approve</button>
+    </div>
+  `).join("");
+
+  els.approvalList.querySelectorAll("[data-approve-teacher]").forEach((button) => {
+    button.addEventListener("click", () => approveTeacher(button.dataset.approveTeacher));
+  });
+}
+
+function requestTeacherApproval(email) {
+  if (state.pendingTeacherApprovals.some((request) => request.email === email)) return;
+  state.pendingTeacherApprovals.push({
+    email,
+    requestedAt: new Date().toISOString()
+  });
+}
+
+function approveTeacher(email) {
+  if (!requireTeacherAccess()) return;
+  if (state.email !== "patrick.feltner@knott.kyschools.us") {
+    setMessage(els.teacherMessage, "Only Patrick Feltner can approve teacher accounts.", "teacher-error");
+    return;
+  }
+  if (!state.approvedTeachers.includes(email)) state.approvedTeachers.push(email);
+  state.pendingTeacherApprovals = state.pendingTeacherApprovals.filter((request) => request.email !== email);
+  persist();
+  renderApprovals();
+  setMessage(els.teacherMessage, `${email} is approved as a teacher.`, "teacher-ok");
+}
+
+function filteredStandards() {
+  const term = els.standardSearch ? els.standardSearch.value.trim().toLowerCase() : "";
+  return standardsForActiveClass().filter((standard) => {
+    const searchable = `${standard.code} ${standard.text} ${standard.subject} ${standard.grade}`.toLowerCase();
+    return !term || searchable.includes(term);
+  });
+}
+
+function standardsForActiveClass() {
+  return standards.filter((standard) => standard.subject === state.page.subject && standard.grade === state.page.grade);
+}
+
+function toggleStandard(code, checked) {
+  if (!requireTeacherAccess()) return;
+
+  if (checked && !state.selectedStandardCodes.includes(code)) {
+    state.selectedStandardCodes.push(code);
+  } else if (!checked) {
+    state.selectedStandardCodes = state.selectedStandardCodes.filter((item) => item !== code);
+  }
+
+  invalidateSelectedDrafts();
+  persist();
+  renderStandards();
+  renderDraftPreview();
+}
+
+function renderTeacherCalendar() {
+  const ringers = activeRingers();
+  const [year, month] = state.calendarMonth.split("-").map(Number);
+  const first = new Date(year, month - 1, 1, 12);
+  const last = new Date(year, month, 0, 12);
+  els.calendarMonthLabel.textContent = first.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+
+  const days = [];
+  for (let day = 1; day <= last.getDate(); day += 1) {
+    const date = new Date(year, month - 1, day, 12);
+    if (date.getDay() !== 0 && date.getDay() !== 6) days.push(toISODate(date));
+  }
+
+  els.teacherCalendar.innerHTML = days.map((date) => {
+    const selected = state.selectedDates.includes(date);
+    const disabled = false;
+    const posted = Boolean(ringers[date]);
+    return `
+      <button class="${selected ? "is-selected" : ""} ${posted ? "is-posted" : ""}" type="button" data-date="${date}" ${disabled ? "disabled" : ""}>
+        <span>${Number(date.slice(8, 10))}</span>
+        <small>${posted ? "Posted" : selected ? "Plan" : ""}</small>
+      </button>
+    `;
+  }).join("");
+
+  els.teacherCalendar.querySelectorAll("[data-date]").forEach((button) => {
+    button.addEventListener("click", () => toggleDate(button.dataset.date));
+  });
+}
+
+function toggleDate(date) {
+  if (!requireTeacherAccess()) return;
+
+  if (state.selectedDates.includes(date)) {
+    state.selectedDates = state.selectedDates.filter((item) => item !== date);
+  } else if (isSchoolDay(date)) {
+    state.selectedDates.push(date);
+  }
+
+  state.selectedDates = unique(state.selectedDates).sort();
+  if (!state.selectedDates.length) state.selectedDates = [isoToday];
+  ensureDateConfigs();
+  persist();
+  renderTeacherCalendar();
+  renderSelectedSummaries();
+  renderDateSetupList();
+  renderDraftPreview();
+}
+
+function selectDateRange() {
+  if (!requireTeacherAccess()) return;
+
+  const start = els.dateStart.value;
+  const end = els.dateEnd.value;
+  if (!start || !end) return;
+
+  state.selectedDates = datesBetween(start <= end ? start : end, start <= end ? end : start);
+  if (!state.selectedDates.length) {
+    setMessage(els.teacherMessage, "Pick a range with at least one school day.", "teacher-error");
+    state.selectedDates = [isoToday];
+  }
+  ensureDateConfigs();
+  state.calendarMonth = state.selectedDates[0].slice(0, 7);
+  persist();
+  renderTeacherCalendar();
+  renderSelectedSummaries();
+  renderDateSetupList();
+  renderDraftPreview();
+}
+
+function moveCalendar(offset) {
+  if (!requireTeacherAccess()) return;
+
+  const [year, month] = state.calendarMonth.split("-").map(Number);
+  const next = new Date(year, month - 1 + offset, 1, 12);
+  state.calendarMonth = toISODate(next).slice(0, 7);
+  persist();
+  renderTeacherCalendar();
+}
+
+function renderSelectedSummaries() {
+  const selectedStandards = getSelectedStandards();
+  els.dateStart.value = state.selectedDates[0] || isoToday;
+  els.dateEnd.value = state.selectedDates[state.selectedDates.length - 1] || isoToday;
+  els.selectedStandardsList.innerHTML = selectedStandards.map((standard) => `
+    <span class="selection-chip">${standard.code}</span>
+  `).join("") || `<span class="empty-note">No standards selected yet.</span>`;
+
+  els.selectedDatesList.innerHTML = state.selectedDates.map((date) => `
+    <span class="selection-chip">${formatShortDate(date)}</span>
+  `).join("");
+}
+
+function resetDateStandardsForClass() {
+  state.selectedStandardCodes = [];
+  state.selectedDates.forEach((date) => {
+    if (!state.dateConfigs[date]) return;
+    state.dateConfigs[date].standardCodes = [...state.selectedStandardCodes];
+    delete state.generatedDrafts[date];
+  });
+}
+
+function ensureDateConfigs() {
+  state.selectedDates.forEach((date) => {
+    if (state.dateConfigs[date]) return;
+    state.dateConfigs[date] = {
+      teacherPrompt: els.teacherPrompt.value.trim(),
+      questionType: els.questionType.value,
+      dok: els.dokSelect.value,
+      standardCodes: [...state.selectedStandardCodes]
+    };
+  });
+}
+
+function applyWeeklySetupToAllDates() {
+  if (!requireTeacherAccess()) return;
+  state.selectedDates.forEach((date) => {
+    state.dateConfigs[date] = {
+      teacherPrompt: els.teacherPrompt.value.trim(),
+      questionType: els.questionType.value,
+      dok: els.dokSelect.value,
+      standardCodes: [...state.selectedStandardCodes]
+    };
+    delete state.generatedDrafts[date];
+  });
+  persist();
+  renderDateSetupList();
+  renderDraftPreview();
+  setMessage(els.teacherMessage, "Weekly setup applied. You can now adjust any individual date.", "teacher-ok");
+}
+
+function renderDateSetupList() {
+  ensureDateConfigs();
+  const ringers = activeRingers();
+  const classStandards = standards.filter((standard) => {
+    return standard.subject === state.page.subject && standard.grade === state.page.grade;
+  });
+  const questionTypes = Array.from(els.questionType.options).map((option) => option.value);
+  const dokOptions = Array.from(els.dokSelect.options).map((option) => ({
+    value: option.value,
+    label: option.textContent
   }));
-  els.teacherCodeForm.addEventListener("submit", unlockTeacherPage);
-  els.teacherSelect.addEventListener("change", () => {
-    state.selectedTeacherId = els.teacherSelect.value;
-    saveState();
-    populateTeacherStudentSelect();
-    render();
+
+  els.dateSetupList.innerHTML = state.selectedDates.map((date, index) => {
+    const config = state.dateConfigs[date];
+    const selectedCount = config.standardCodes.length;
+    return `
+      <article class="date-setup-card">
+        <div class="date-setup-header">
+          <div>
+            <span class="date-number">${index + 1}</span>
+            <div>
+              <h5>${formatLongDate(date)}</h5>
+              <p>${ringers[date] ? "Previously published" : "Not published yet"}</p>
+            </div>
+          </div>
+          <span class="status-tag ${state.generatedDrafts[date] ? "ready" : ""}" data-date-status="${date}">${state.generatedDrafts[date] ? "Generated" : "Needs generation"}</span>
+        </div>
+
+        <label>
+          Topic or idea for this date
+          <textarea rows="3" data-config-date="${date}" data-config-field="teacherPrompt" placeholder="What should this day's bell ringer be about?">${escapeHtml(config.teacherPrompt)}</textarea>
+        </label>
+
+        <div class="builder-row">
+          <label>
+            Question type
+            <select data-config-date="${date}" data-config-field="questionType">
+              ${questionTypes.map((type) => `<option ${type === config.questionType ? "selected" : ""}>${escapeHtml(type)}</option>`).join("")}
+            </select>
+          </label>
+          <label>
+            Depth of Knowledge
+            <select data-config-date="${date}" data-config-field="dok">
+              ${dokOptions.map((option) => `<option value="${option.value}" ${option.value === config.dok ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+            </select>
+          </label>
+        </div>
+
+        <details class="standards-menu date-standards-menu">
+          <summary data-standard-summary="${date}">${selectedCount} standard${selectedCount === 1 ? "" : "s"} selected</summary>
+          <div class="date-standard-options">
+            ${classStandards.map((standard) => `
+              <label class="standard-check">
+                <input type="checkbox" data-config-date="${date}" data-config-field="standardCodes" value="${standard.code}" ${config.standardCodes.includes(standard.code) ? "checked" : ""}>
+                <span><strong>${standard.code}</strong>${standard.text}</span>
+              </label>
+            `).join("")}
+          </div>
+        </details>
+      </article>
+    `;
+  }).join("");
+}
+
+function handleDateConfigChange(event) {
+  const target = event.target;
+  const date = target.dataset.configDate;
+  const field = target.dataset.configField;
+  if (!date || !field || !state.dateConfigs[date]) return;
+
+  if (field === "standardCodes") {
+    const checked = els.dateSetupList.querySelectorAll(`[data-config-date="${date}"][data-config-field="standardCodes"]:checked`);
+    state.dateConfigs[date].standardCodes = Array.from(checked).map((input) => input.value);
+    const summary = els.dateSetupList.querySelector(`[data-standard-summary="${date}"]`);
+    const count = state.dateConfigs[date].standardCodes.length;
+    if (summary) summary.textContent = `${count} standard${count === 1 ? "" : "s"} selected`;
+  } else {
+    state.dateConfigs[date][field] = target.value;
+  }
+
+  delete state.generatedDrafts[date];
+  const status = els.dateSetupList.querySelector(`[data-date-status="${date}"]`);
+  if (status) {
+    status.textContent = "Needs generation";
+    status.classList.remove("ready");
+  }
+  persist();
+  renderDraftPreview();
+  setMessage(els.teacherMessage, `${formatShortDate(date)} updated. Generate when ready.`, "teacher-ok");
+}
+
+async function generateQuestions() {
+  if (!requireTeacherAccess()) return;
+
+  ensureDateConfigs();
+  const missingStandardsDate = state.selectedDates.find((date) => !state.dateConfigs[date].standardCodes.length);
+  if (!state.selectedDates.length || missingStandardsDate) {
+    setMessage(els.teacherMessage, missingStandardsDate
+      ? `Choose at least one standard for ${formatShortDate(missingStandardsDate)}.`
+      : "Select at least one school day.", "teacher-error");
+    return;
+  }
+
+  setMessage(els.teacherMessage, "Asking ChatGPT for classroom-ready KSA-style items...", "teacher-ok");
+
+  try {
+    const result = await apiGenerateBellringers();
+    result.items.forEach((item) => {
+      state.generatedDrafts[item.date] = item.studentPrompt;
+    });
+    setMessage(els.teacherMessage, `Generated ${result.items.length} live ChatGPT bell ringer${result.items.length === 1 ? "" : "s"}.`, "teacher-ok");
+  } catch (error) {
+    state.selectedDates.forEach((date, index) => {
+      const config = state.dateConfigs[date];
+      const standardsForPrompt = config.standardCodes
+        .map((code) => standards.find((standard) => standard.code === code))
+        .filter(Boolean);
+      state.generatedDrafts[date] = ksaPrompt({
+        date,
+        subject: state.page.subject,
+        grade: state.page.grade,
+        standards: standardsForPrompt,
+        dok: config.dok,
+        questionType: config.questionType,
+        teacherPrompt: config.teacherPrompt,
+        sequence: index + 1
+      });
+    });
+    setMessage(els.teacherMessage, `ChatGPT is not connected yet, so I used the local demo generator. ${error.message}`, "teacher-error");
+  }
+
+  persist();
+  renderDateSetupList();
+  renderDraftPreview();
+}
+
+async function publishRingers(event) {
+  event.preventDefault();
+  if (!requireTeacherAccess()) return;
+
+  ensureDateConfigs();
+  if (!state.selectedDates.length) {
+    setMessage(els.teacherMessage, "Select standards and dates before publishing.", "teacher-error");
+    return;
+  }
+
+  if (!Object.keys(state.generatedDrafts).some((date) => state.selectedDates.includes(date))) {
+    await generateQuestions();
+  }
+
+  const ringers = activeRingers();
+  state.selectedDates.forEach((date, index) => {
+    const config = state.dateConfigs[date];
+    const standardsForPrompt = config.standardCodes
+      .map((code) => standards.find((standard) => standard.code === code))
+      .filter(Boolean);
+    const question = state.generatedDrafts[date] || ksaPrompt({
+      date,
+      subject: state.page.subject,
+      grade: state.page.grade,
+      standards: standardsForPrompt,
+      dok: config.dok,
+      questionType: config.questionType,
+      teacherPrompt: config.teacherPrompt,
+      sequence: index + 1
+    });
+    ringers[date] = buildRinger(date, standardsForPrompt, config.dok, config.questionType, question, config.teacherPrompt);
   });
-  els.teacherGradeSelect.addEventListener("change", () => {
-    state.selectedTeacherGrade = els.teacherGradeSelect.value;
-    els.addStudentGradeSelect.value = state.selectedTeacherGrade;
-    saveState();
-    populateTeacherStudentSelect();
-    render();
+
+  persist();
+  setMessage(els.teacherMessage, `Published ${state.selectedDates.length} bell ringer${state.selectedDates.length === 1 ? "" : "s"}.`, "teacher-ok");
+  renderTeacherCalendar();
+  renderStudentAssignment();
+  renderGradebook();
+}
+
+function renderDraftPreview() {
+  const drafts = state.selectedDates.map((date) => {
+    const draft = state.generatedDrafts[date] || "";
+    if (draft) return `${formatLongDate(date)}\n${draft}`;
+
+    const config = state.dateConfigs[date] || {};
+    const topic = config.teacherPrompt || "No topic entered yet";
+    return [
+      formatLongDate(date),
+      "Ready to generate",
+      `Topic: ${topic}`,
+      `Question type: ${config.questionType || els.questionType.value}`,
+      `DOK: ${config.dok || els.dokSelect.value}`,
+      "Click Generate selected dates to create the full student item."
+    ].join("\n");
   });
-  els.addStudentGradeSelect.addEventListener("change", () => {
-    state.selectedTeacherGrade = els.addStudentGradeSelect.value;
-    els.teacherGradeSelect.value = state.selectedTeacherGrade;
-    saveState();
-    populateTeacherStudentSelect();
-    render();
+  els.questionText.value = drafts.join("\n\n---\n\n");
+}
+
+function invalidateSelectedDrafts() {
+  state.selectedDates.forEach((date) => {
+    delete state.generatedDrafts[date];
   });
-  els.studentSelect.addEventListener("change", render);
-  els.destinationSelect.addEventListener("change", render);
-  els.overrideCheck.addEventListener("change", render);
-  els.signoutForm.addEventListener("submit", teacherSignOut);
-  els.displayGradeSelect.addEventListener("change", () => {
-    state.selectedDisplayGrade = els.displayGradeSelect.value;
-    saveState();
-    populateDisplayStudentSelect();
-    render();
+  persist();
+  renderDraftPreview();
+  setMessage(els.teacherMessage, "Settings changed. Click Generate selected dates for a new preview.", "teacher-ok");
+}
+
+function renderStudentAssignment() {
+  const date = els.studentDate.value || isoToday;
+  const ringers = activeRingers();
+  const ringer = ringers[date];
+  const existing = currentStudentSubmission(date);
+
+  els.calendarSummary.innerHTML = recentSchoolDays(8)
+    .map((day) => {
+      const status = day > isoToday ? "locked" : currentStudentSubmission(day) ? "done" : ringers[day] ? "ready" : "";
+      const label = status === "done" ? "Done" : status === "ready" ? "Ready" : status === "locked" ? "Locked" : "No post";
+      return `
+        <div class="calendar-row">
+          <span>${formatLongDate(day)}</span>
+          <span class="status-tag ${status}">${label}</span>
+        </div>
+      `;
+    })
+    .join("");
+
+  if (date > isoToday || !isSchoolDay(date)) {
+    els.studentQuestion.textContent = "This date is locked because it is not an open school day.";
+    els.assignmentMeta.innerHTML = "";
+    els.studentAnswer.disabled = true;
+    els.studentFeedback.textContent = "";
+    return;
+  }
+
+  if (!ringer) {
+    els.studentQuestion.textContent = "No bell ringer has been posted for this day.";
+    els.assignmentMeta.innerHTML = "";
+    els.studentAnswer.disabled = true;
+    els.studentFeedback.textContent = "";
+    return;
+  }
+
+  els.studentAnswer.disabled = false;
+  els.studentQuestion.textContent = studentFacingQuestion(ringer);
+  els.assignmentMeta.innerHTML = [
+    ringer.subject,
+    `Grade ${ringer.grade}`,
+    `DOK ${ringer.dok}`,
+    ringer.questionType
+  ].map((item) => `<span class="meta-chip">${item}</span>`).join("");
+
+  if (existing) {
+    els.studentAnswer.value = existing.answer;
+    els.studentFeedback.innerHTML = `<strong>${existing.score}/5 points</strong><br>${existing.feedback}`;
+  } else {
+    els.studentAnswer.value = "";
+    els.studentFeedback.textContent = "Submit your response to see your score and feedback.";
+  }
+}
+
+async function submitAnswer(event) {
+  event.preventDefault();
+
+  if (!state.email || state.role !== "student") {
+    els.studentFeedback.innerHTML = `<span class="student-error">Sign in as a student first.</span>`;
+    return;
+  }
+
+  const date = els.studentDate.value || isoToday;
+  const ringer = activeRingers()[date];
+  const answer = els.studentAnswer.value.trim();
+
+  if (!ringer || date > isoToday || !isSchoolDay(date) || !answer) {
+    els.studentFeedback.innerHTML = `<span class="student-error">Choose an open bell ringer and enter an answer.</span>`;
+    return;
+  }
+
+  let grade;
+  try {
+    els.studentFeedback.innerHTML = "Grading with ChatGPT...";
+    grade = await apiGradeSubmission(ringer, answer);
+  } catch (error) {
+    grade = mockChatGPTGrade(ringer, answer);
+    grade.feedback = `${grade.feedback} ChatGPT grading is not connected yet, so this is demo feedback.`;
+  }
+  const existingIndex = state.submissions.findIndex((item) => item.classId === state.activeClassId && item.date === date && item.email === state.email);
+  const submission = {
+    classId: state.activeClassId,
+    date,
+    email: state.email,
+    name: nameFromEmail(state.email),
+    answer,
+    score: grade.score,
+    feedback: grade.feedback,
+    gradedAt: new Date().toISOString()
+  };
+
+  if (existingIndex >= 0) {
+    state.submissions[existingIndex] = submission;
+  } else {
+    state.submissions.push(submission);
+  }
+
+  persist();
+  els.studentFeedback.innerHTML = `<strong>${grade.score}/5 points</strong><br>${grade.feedback}`;
+  renderGradebook();
+  renderStudentAssignment();
+}
+
+async function apiGenerateBellringers() {
+  const datePlans = state.selectedDates.map((date) => {
+    const config = state.dateConfigs[date];
+    return {
+      date,
+      teacherPrompt: config.teacherPrompt,
+      questionType: config.questionType,
+      dok: config.dok,
+      standards: config.standardCodes.map((code) => {
+        const standard = standards.find((item) => item.code === code);
+        return standard ? { code: standard.code, text: standard.text } : null;
+      }).filter(Boolean)
+    };
   });
-  els.displayTeacherSelect.addEventListener("change", () => {
-    state.selectedDisplayTeacherId = els.displayTeacherSelect.value;
-    saveState();
-    populateDisplayStudentSelect();
-    render();
-  });
-  els.displayStudentSelect.addEventListener("change", render);
-  els.displayDestinationSelect.addEventListener("change", render);
-  els.displaySignoutForm.addEventListener("submit", displaySignOut);
-  [
-    els.reportRangeSelect,
-    els.reportStartDate,
-    els.reportEndDate,
-    els.reportDestinationSelect,
-    els.reportTeacherSelect,
-    els.reportScopeSelect
-  ].forEach((control) => control.addEventListener("change", render));
-  els.reportStudentSearch.addEventListener("input", render);
-  els.reportPieTeacherChecks.addEventListener("change", render);
-  els.reportStudentResults.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-report-student-id]");
-    if (!button) return;
-    selectedReportStudentIdValue = button.dataset.reportStudentId;
-    const student = studentById(selectedReportStudentIdValue);
-    els.reportStudentSearch.value = student?.name || "";
-    els.reportStudentResults.classList.add("hidden");
-    render();
-  });
-  els.selectedStudentBanner.addEventListener("click", (event) => {
-    if (!event.target.closest("[data-clear-report-student]")) return;
-    selectedReportStudentIdValue = "all";
-    els.reportStudentSearch.value = "";
-    render();
-  });
-  els.teacherNameForm.addEventListener("submit", saveTeacherName);
-  els.addStudentForm.addEventListener("submit", addStudent);
-  els.saveSettingsButton.addEventListener("click", saveSettings);
-  els.bulkImportButton.addEventListener("click", bulkImportStudents);
-  els.downloadRosterButton.addEventListener("click", downloadRosterCsv);
-  els.exportTripsButton.addEventListener("click", exportFilteredTrips);
-  els.resetDayButton.addEventListener("click", resetDay);
-  document.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-return-id]");
-    if (button) returnStudent(button.dataset.returnId);
-  });
-  els.todayCounts.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-delete-student-id]");
-    if (!button) return;
-    deleteStudent(button.dataset.deleteStudentId);
-  });
-  els.todayCounts.addEventListener("change", (event) => {
-    const input = event.target.closest("[data-medical-id]");
-    if (!input) return;
-    state.medicalNotes[input.dataset.medicalId] = input.checked;
-    saveState();
-    render();
+
+  return postJson("/api/bellringers/generate", {
+    subject: state.page.subject,
+    grade: state.page.grade,
+    dates: state.selectedDates,
+    datePlans
   });
 }
 
-function render() {
-  renderTeacherAccess();
-  renderTeacherSubtabs();
-  renderTeacherView();
-  renderDisplayView();
-  renderDataCenter();
-  renderSettings();
+async function apiGradeSubmission(ringer, answer) {
+  const result = await postJson("/api/submissions/grade", {
+    question: studentFacingQuestion(ringer),
+    answer,
+    subject: ringer.subject,
+    grade: ringer.grade,
+    dok: ringer.dok,
+    questionType: ringer.questionType,
+    standards: (ringer.standardTexts || [ringer.standardText]).map((text, index) => ({
+      code: (ringer.standardCodes || [ringer.standardCode])[index] || "",
+      text
+    }))
+  });
+
+  return {
+    score: Math.max(0, Math.min(5, Number(result.score) || 0)),
+    feedback: result.feedback || `What you did well: ${result.whatWentWell} Suggestion: ${result.suggestion}`
+  };
 }
 
-populateSelects();
-bindEvents();
-render();
-initializeSharedData();
-setInterval(render, 1000);
+async function postJson(url, payload) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `Request failed with ${response.status}`);
+  return data;
+}
+
+function renderGradebook() {
+  const range = els.gradebookRange.value || "day";
+  const anchor = els.gradebookDate.value || isoToday;
+  const windowDates = datesForRange(anchor, range);
+  const ringers = activeRingers();
+  const submissions = state.submissions.filter((item) => item.classId === state.activeClassId && windowDates.includes(item.date));
+  const possible = windowDates.filter((day) => Boolean(ringers[day])).length * 5;
+  const rows = state.students.map((student) => {
+    const mine = submissions.filter((item) => item.email === student.email);
+    const total = mine.reduce((sum, item) => sum + item.score, 0);
+    const avg = mine.length ? (total / mine.length).toFixed(1) : "0.0";
+    const latest = mine.slice().sort((a, b) => b.gradedAt.localeCompare(a.gradedAt))[0];
+    return { student, mine, total, avg, latest };
+  });
+
+  const classTotal = rows.reduce((sum, row) => sum + row.total, 0);
+  const submissionCount = rows.reduce((sum, row) => sum + row.mine.length, 0);
+  const avgScore = submissionCount ? (classTotal / submissionCount).toFixed(1) : "0.0";
+
+  els.gradebookStats.innerHTML = [
+    ["Posted days", windowDates.filter((day) => ringers[day]).length],
+    ["Submissions", submissionCount],
+    ["Class average", `${avgScore}/5`],
+    ["Possible per student", possible]
+  ].map(([label, value]) => `<div class="stat-card"><span>${label}</span><strong>${value}</strong></div>`).join("");
+
+  els.gradebookBody.innerHTML = rows
+    .map((row) => `
+      <tr>
+        <td>${row.student.name}</td>
+        <td>${row.student.email}</td>
+        <td>${row.mine.length}</td>
+        <td>${row.total}</td>
+        <td>${row.avg}/5</td>
+        <td>${row.latest ? row.latest.feedback : "No submissions in this range."}</td>
+      </tr>
+    `)
+    .join("");
+}
+
+function canOpenView(viewName) {
+  return viewName === "student" || (state.role === "teacher" && state.email && state.teacherAuthenticated);
+}
+
+function requireTeacherAccess() {
+  if (state.role === "teacher" && state.email && state.teacherAuthenticated) return true;
+  setMessage(els.teacherMessage, "Please sign in with a teacher password before changing bell ringers or grades.", "teacher-error");
+  setMessage(els.signinMessage, "Teacher access is locked until the password is verified.", "teacher-error");
+  setView("student");
+  return false;
+}
+
+function isValidTeacherLogin(email, password) {
+  return teacherCredentials[email] === password;
+}
+
+function ksaPrompt({ date, subject, grade, standards, dok, questionType, teacherPrompt = "", sequence = 1 }) {
+  const topic = standards.map((standard) => standard.text).join(" ");
+  const gradeText = gradeLevelContent(grade);
+  const dokDirections = {
+    "1": "identify a key detail or accurate procedure",
+    "2": "apply a skill and explain the reasoning",
+    "3": "analyze evidence, justify a claim, or critique reasoning",
+    "4": "synthesize multiple ideas and defend a conclusion"
+  };
+  const topicLine = teacherPrompt ? `\n\nTeacher topic: ${teacherPrompt}` : "";
+
+  if (subject === "Mathematics") {
+    return `Scenario: ${gradeText.mathScenario}${topicLine}\n\nQuestion type: ${questionType}\nQuestion: ${gradeText.mathQuestion} In your answer, ${dokDirections[dok]}, show your work, label the answer, and explain why your strategy makes sense.`;
+  }
+
+  if (subject === "Science") {
+    return `Source: ${gradeText.scienceSource}${topicLine}\n\nQuestion type: ${questionType}\nQuestion: ${gradeText.scienceQuestion} Use evidence from the source in your answer, and explain how the evidence supports your thinking.`;
+  }
+
+  if (subject === "Social Studies") {
+    return `Source: ${gradeText.socialStudiesSource}${topicLine}\n\nQuestion type: ${questionType}\nQuestion: ${gradeText.socialStudiesQuestion} Use evidence from the source and explain how that evidence supports your answer.`;
+  }
+
+  return `Passage: ${gradeText.readingPassage}${topicLine}\n\nQuestion type: ${questionType}\nQuestion: ${gradeText.readingQuestion} ${capitalize(dokDirections[dok])} using evidence from the passage.`;
+}
+
+function gradeLevelContent(grade) {
+  const content = {
+    "5": {
+      readingPassage: "Mia's class planted lettuce in two garden boxes. At first, the plants near the door grew slowly because students forgot to water them. Mia made a chart and asked classmates to sign up for watering days. After two weeks, both boxes looked healthier, and more students wanted to help.",
+      readingQuestion: "What is one main idea of the passage? Give two details that support it.",
+      mathScenario: "A class is making trail mix. Each bag needs 2/3 cup of cereal. The class has 6 cups of cereal.",
+      mathQuestion: "How many full bags of trail mix can the class make?",
+      scienceSource: "A student tests three paper towels. Towel A holds 18 mL of water, Towel B holds 24 mL, and Towel C holds 15 mL. The student uses the same amount of water each time.",
+      scienceQuestion: "Which paper towel is most absorbent, and what evidence supports your claim?",
+      socialStudiesSource: "A diary entry from 1775 says that a family stored extra grain because travel to town had become difficult. The writer also says neighbors shared tools and news.",
+      socialStudiesQuestion: "What does the source show about how people responded to a difficult time?"
+    },
+    "6": {
+      readingPassage: "In the first week of school, Lena noticed that the quietest table in the library was also the one where students helped each other the most. When a new student could not find a book, three classmates paused their own work to search the shelves. By Friday, the table had become the first place students went when they needed calm support.",
+      readingQuestion: "What central idea is developed in the passage? Use two details from the passage to support your answer.",
+      mathScenario: "A recipe uses 3/4 cup of oats for one batch of snack bars. A student has 2 1/4 cups of oats.",
+      mathQuestion: "How many batches can the student make?",
+      scienceSource: "A class tests how three surfaces affect the distance a toy car travels. The car travels 82 cm on tile, 54 cm on cardboard, and 31 cm on carpet. Students repeat each trial three times and notice the same pattern.",
+      scienceQuestion: "What claim can you make about surface type and motion?",
+      socialStudiesSource: "A map shows that an early settlement was built near a river and a forest. A note beside the map says families used the river for travel and the forest for building materials.",
+      socialStudiesQuestion: "How did geography affect where people settled?"
+    },
+    "7": {
+      readingPassage: "The school board considered replacing printed announcements with a daily digital bulletin. Supporters argued that digital messages could be updated quickly and would reduce paper use. Others worried that students without reliable internet at home might miss information. The board decided to test both systems for one month before making a final decision.",
+      readingQuestion: "Which claim is best supported by the passage? Explain how the author develops both sides of the issue.",
+      mathScenario: "A store sells 5 notebooks for $7.50. Another store sells 8 notebooks for $11.60.",
+      mathQuestion: "Which store has the lower unit price, and how do you know?",
+      scienceSource: "Two ponds are observed during a dry month. Pond A has many shaded areas and its water level drops 4 cm. Pond B has little shade and its water level drops 11 cm. Both ponds are measured over the same number of days.",
+      scienceQuestion: "What can the data suggest about environmental conditions and water loss?",
+      socialStudiesSource: "A trade record shows that one city exported cloth and imported grain. A traveler's letter says merchants visited the city because several roads met near its market.",
+      socialStudiesQuestion: "What does the source suggest about the city's economy?"
+    },
+    "8": {
+      readingPassage: "The editorial praised the new community center for giving teenagers a safe place to study, exercise, and meet mentors. However, it also questioned whether the town had planned enough transportation for students who lived far away. The writer concluded that the center could succeed if leaders solved the access problem before opening day.",
+      readingQuestion: "What is the author's point of view, and how does the author respond to a possible concern?",
+      mathScenario: "A water tank drains at a constant rate. After 2 minutes, 44 gallons remain. After 6 minutes, 28 gallons remain.",
+      mathQuestion: "Find the rate of change and explain what it means in this situation.",
+      scienceSource: "Rock layers on a cliff contain seashell fossils near the bottom and plant fossils near the top. A nearby diagram shows the lower layers are older than the upper layers.",
+      scienceQuestion: "What explanation can you construct about how the environment changed over time?",
+      socialStudiesSource: "An excerpt from a civic speech argues that citizens protect democracy by voting, serving on juries, and speaking at public meetings. The speaker warns that rights are weaker when people do not participate.",
+      socialStudiesQuestion: "How does the source connect civic participation with individual rights?"
+    }
+  };
+
+  return content[grade] || content["6"];
+}
+
+function buildRinger(date, selectedStandards, dok, questionType, question, teacherPrompt = "") {
+  return {
+    date,
+    pageCode: state.page.code,
+    standardCodes: selectedStandards.map((standard) => standard.code),
+    standardTexts: selectedStandards.map((standard) => standard.text),
+    standardCode: selectedStandards[0].code,
+    standardText: selectedStandards[0].text,
+    subject: state.page.subject,
+    grade: state.page.grade,
+    dok,
+    questionType,
+    teacherPrompt,
+    question
+  };
+}
+
+function studentFacingQuestion(ringer) {
+  return ringer.question
+    .replace(/^KSA-style[\s\S]*?(Passage|Source|Scenario):/i, "$1:")
+    .replace(/\s+and connect the answer to .*$/i, ".")
+    .replace(/\bKY\.[A-Za-z0-9.-]+,?\s*/g, "")
+    .trim();
+}
+
+function mockChatGPTGrade(ringer, answer) {
+  const wordCount = answer.split(/\s+/).filter(Boolean).length;
+  const hasEvidence = /\b(evidence|source|passage|data|because|for example|shows|according)\b/i.test(answer);
+  const hasImprovement = /\b(improve|next time|more|another|specific|measure|explain)\b/i.test(answer);
+  const mentionsTopic = (ringer.standardTexts || [ringer.standardText])
+    .join(" ")
+    .split(/\W+/)
+    .filter((word) => word.length > 5)
+    .some((word) => answer.toLowerCase().includes(word.toLowerCase()));
+
+  let score = 1;
+  if (wordCount >= 12) score += 1;
+  if (wordCount >= 28) score += 1;
+  if (hasEvidence || mentionsTopic) score += 1;
+  if (hasImprovement) score += 1;
+  score = Math.min(5, score);
+
+  const strength = hasEvidence
+    ? "You did a good job using evidence or reasoning from the prompt."
+    : "You did a good job getting your thinking started and answering in your own words.";
+  const nextStep = score >= 4
+    ? "To make it even stronger, add one more precise detail and connect it directly to the standard."
+    : score >= 3
+      ? "To improve, add a clearer piece of evidence and explain how that evidence proves your answer."
+      : "To improve, restate the question, include one exact detail from the prompt, and explain your reasoning in a complete sentence.";
+
+  return { score, feedback: `What you did well: ${strength} Suggestion: ${nextStep}` };
+}
+
+function getSelectedStandards() {
+  return state.selectedStandardCodes
+    .map((code) => standards.find((standard) => standard.code === code))
+    .filter(Boolean);
+}
+
+function defaultStandard() {
+  return filteredStandards()[0] || standards.find((standard) => standard.grade === state.page.grade) || standards[0];
+}
+
+function currentStudentSubmission(date) {
+  if (!state.email) return null;
+  return state.submissions.find((item) => item.classId === state.activeClassId && item.date === date && item.email === state.email) || null;
+}
+
+function recentSchoolDays(count) {
+  const days = [];
+  let cursor = new Date(`${isoToday}T12:00:00`);
+  while (days.length < count) {
+    if (isSchoolDay(toISODate(cursor))) days.push(toISODate(cursor));
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return days;
+}
+
+function datesForRange(anchor, range) {
+  const dates = [];
+  const start = new Date(`${anchor}T12:00:00`);
+  const end = new Date(start);
+
+  if (range === "week") {
+    const day = start.getDay() || 7;
+    start.setDate(start.getDate() - day + 1);
+    end.setDate(start.getDate() + 4);
+  } else if (range === "month") {
+    start.setDate(1);
+    end.setMonth(start.getMonth() + 1, 0);
+  }
+
+  for (const cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
+    const date = toISODate(cursor);
+    if (isSchoolDay(date)) dates.push(date);
+    if (range === "day") break;
+  }
+
+  return dates;
+}
+
+function datesBetween(start, end) {
+  const dates = [];
+  const cursor = new Date(`${start}T12:00:00`);
+  const stop = new Date(`${end}T12:00:00`);
+  for (; cursor <= stop; cursor.setDate(cursor.getDate() + 1)) {
+    const date = toISODate(cursor);
+    if (isSchoolDay(date)) dates.push(date);
+  }
+  return dates;
+}
+
+function previousSchoolDay(date) {
+  const cursor = new Date(`${date}T12:00:00`);
+  do {
+    cursor.setDate(cursor.getDate() - 1);
+  } while (!isSchoolDay(toISODate(cursor)));
+  return toISODate(cursor);
+}
+
+function latestSchoolDate(date) {
+  const cursor = new Date(`${toISODate(date)}T12:00:00`);
+  while (!isSchoolDay(toISODate(cursor))) {
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return toISODate(cursor);
+}
+
+function isSchoolDay(date) {
+  const day = new Date(`${date}T12:00:00`).getDay();
+  return day !== 0 && day !== 6;
+}
+
+function toISODate(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function formatLongDate(date) {
+  return new Date(`${date}T12:00:00`).toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric"
+  });
+}
+
+function formatShortDate(date) {
+  return new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function unique(items) {
+  return Array.from(new Set(items));
+}
+
+function capitalize(value) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function nameFromEmail(email) {
+  const prefix = email.split("@")[0].replace(/[._-]+/g, " ");
+  return prefix.replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function setMessage(element, text, className) {
+  element.className = `form-note ${className}`;
+  element.textContent = text;
+}

@@ -3,356 +3,328 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>HallPass | Classroom Sign-Out</title>
-    <link rel="stylesheet" href="styles.css">
+    <title>BellRinger</title>
+    <link rel="stylesheet" href="styles.css?v=20260628a">
   </head>
   <body>
     <div class="app-shell">
-      <header class="topbar">
-        <a class="brand" href="#" aria-label="HallPass home">
-          <span class="brand-mark">HP</span>
-          <span>
-            <strong>HallPass</strong>
-            <small>Classroom sign-out system</small>
-          </span>
-        </a>
-        <nav class="view-tabs" aria-label="Main views">
-          <button class="tab active" type="button" data-view="display">Student Display</button>
-          <button class="tab" type="button" data-view="teacher">Teacher Page</button>
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">BR</div>
+          <div>
+            <h1>BellRinger</h1>
+            <p>Daily starts, scored clearly.</p>
+          </div>
+        </div>
+
+        <section class="signin-panel" aria-labelledby="signin-title">
+          <h2 id="signin-title">Sign in</h2>
+          <label>
+            School email
+            <input id="emailInput" type="email" value="patrick.feltner@knott.kyschools.us" autocomplete="email">
+          </label>
+          <label id="passwordField">
+            Teacher password
+            <input id="passwordInput" type="password" value="" autocomplete="current-password">
+          </label>
+          <div class="role-toggle" role="group" aria-label="Role">
+            <button class="segmented is-active" data-role="teacher">Teacher</button>
+            <button class="segmented" data-role="student">Student</button>
+          </div>
+          <button id="signInButton" class="primary-button">Enter BellRinger</button>
+          <p id="signinMessage" class="form-note" aria-live="polite"></p>
+        </section>
+
+        <nav class="nav-tabs" aria-label="Main sections">
+          <button class="nav-tab is-active" data-view="teacher">Teacher Studio</button>
+          <button class="nav-tab" data-view="classes">Classes</button>
+          <button class="nav-tab" data-view="student">Student Bell</button>
+          <button class="nav-tab" data-view="gradebook">Gradebook</button>
         </nav>
-      </header>
+
+        <section class="student-total">
+          <span>Signed in as</span>
+          <strong id="activeUser">Not signed in</strong>
+          <span id="activeRole">Choose a role to begin</span>
+          <button id="signOutButton" class="sidebar-button" type="button" hidden>Sign out</button>
+        </section>
+      </aside>
 
       <main>
-        <section id="teacherView" class="view">
-          <section id="teacherLock" class="lock-panel">
-            <div>
-              <p class="eyebrow">Teacher access</p>
-              <h1>Enter teacher code</h1>
-              <p class="settings-note">Teacher tools are locked from the student sign-out display.</p>
-            </div>
-            <form id="teacherCodeForm" class="code-form">
-              <label>
-                4 digit code
-                <input id="teacherCodeInput" type="password" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="Code">
+        <section class="top-strip">
+          <div>
+            <p class="eyebrow">Kentucky standards aligned</p>
+            <h2 id="pageTitle">Teacher Studio</h2>
+          </div>
+          <div class="date-pill" id="todayPill"></div>
+        </section>
+
+        <section id="teacherView" class="view-panel is-visible" aria-labelledby="teacher-heading">
+          <div class="workspace-grid">
+            <form id="ringerForm" class="panel ringer-builder">
+              <div class="panel-heading">
+                <div>
+                  <h3 id="teacher-heading">Bell ringer hub</h3>
+                  <p>Plan a whole week at once, then adjust any individual day.</p>
+                </div>
+                <div class="class-switcher">
+                  <label>
+                    Active class
+                    <select id="classSelect"></select>
+                  </label>
+                  <button class="secondary-button" data-view="classes" type="button">Manage classes</button>
+                </div>
+              </div>
+
+              <section class="workflow-step">
+                <div class="step-heading">
+                  <span>1</span>
+                  <div>
+                    <h4>Choose dates</h4>
+                    <p>Select individual school days or use a date range for the week.</p>
+                  </div>
+                </div>
+
+                <div class="builder-row">
+                  <label>
+                    Start date
+                    <input id="dateStart" type="date">
+                  </label>
+                  <label>
+                    End date
+                    <input id="dateEnd" type="date">
+                  </label>
+                </div>
+                <button id="selectRangeButton" class="secondary-button range-button" type="button">Use this date range</button>
+
+                <div class="calendar-builder" aria-label="Bell ringer date picker">
+                  <div class="calendar-builder-header">
+                    <button id="prevMonthButton" class="icon-button" type="button" aria-label="Previous month">&lt;</button>
+                    <strong id="calendarMonthLabel"></strong>
+                    <button id="nextMonthButton" class="icon-button" type="button" aria-label="Next month">&gt;</button>
+                  </div>
+                  <div class="calendar-weekdays" aria-hidden="true">
+                    <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span>
+                  </div>
+                  <div id="teacherCalendar" class="teacher-calendar"></div>
+                </div>
+
+                <div class="selection-summary">
+                  <strong>Selected dates</strong>
+                  <div id="selectedDatesList" class="selected-list"></div>
+                </div>
+              </section>
+
+              <section class="workflow-step">
+                <div class="step-heading">
+                  <span>2</span>
+                  <div>
+                    <h4>Set up the week</h4>
+                    <p>These choices can be copied to every selected date.</p>
+                  </div>
+                </div>
+
+                <label>
+                  Topic or idea
+                  <textarea id="teacherPrompt" rows="4" placeholder="Example: Compare theme and central idea using a short passage about teamwork."></textarea>
+                </label>
+
+                <div class="builder-row">
+                  <label>
+                    Question type
+                    <select id="questionType">
+                      <option>Short answer</option>
+                      <option>Multiple choice</option>
+                      <option>Multiple select</option>
+                      <option>Drag and drop</option>
+                      <option>Evidence-based selected response</option>
+                      <option>Constructed response</option>
+                      <option>Math problem</option>
+                      <option>Science investigation</option>
+                      <option>Source-based prompt</option>
+                      <option>Teacher choice</option>
+                    </select>
+                  </label>
+                  <label>
+                    Depth of Knowledge
+                    <select id="dokSelect">
+                      <option value="1">DOK 1 - Recall</option>
+                      <option value="2">DOK 2 - Skill / Concept</option>
+                      <option value="3">DOK 3 - Strategic Thinking</option>
+                      <option value="4">DOK 4 - Extended Thinking</option>
+                    </select>
+                  </label>
+                </div>
+
+                <details class="standards-menu" open>
+                  <summary id="standardsMenuLabel">Select Kentucky standards (0 selected)</summary>
+                  <div class="standards-menu-content">
+                    <label class="standards-search-label">
+                      Search standards
+                      <input id="standardSearch" class="search-input" type="search" placeholder="Type a code, keyword, or phrase">
+                    </label>
+                    <label class="standards-select-label">
+                      Standards dropdown
+                      <select id="standardsSelect" class="standards-select" multiple size="8" aria-describedby="standardsHelp"></select>
+                    </label>
+                    <p id="standardsHelp" class="form-note">Hold Ctrl while clicking to choose more than one standard.</p>
+                    <p id="standardsCount" class="form-note"></p>
+                    <div id="standardsList" class="standards-list" aria-live="polite"></div>
+                  </div>
+                </details>
+
+                <div class="selection-summary">
+                  <strong>Selected standards</strong>
+                  <div id="selectedStandardsList" class="selected-list"></div>
+                </div>
+
+                <button id="applyToAllButton" class="secondary-button" type="button">Apply setup to all selected dates</button>
+              </section>
+
+              <section class="workflow-step">
+                <div class="step-heading">
+                  <span>3</span>
+                  <div>
+                    <h4>Review each date</h4>
+                    <p>Edit any day before generating the questions.</p>
+                  </div>
+                </div>
+                <div id="dateSetupList" class="date-setup-list"></div>
+              </section>
+
+              <label class="generated-preview">
+                Generated preview
+                <textarea id="questionText" rows="10" placeholder="Generated readings and questions will appear here."></textarea>
               </label>
-              <button class="primary-action" type="submit">Unlock Teacher Page</button>
-              <p id="teacherCodeMessage" class="form-message" aria-live="polite"></p>
+
+              <div class="button-row">
+                <button id="generateButton" class="secondary-button" type="button">Generate selected dates</button>
+                <button class="primary-button" type="submit">Publish selected dates</button>
+              </div>
+              <p id="teacherMessage" class="form-note" aria-live="polite"></p>
             </form>
-          </section>
+          </div>
+        </section>
 
-          <div id="teacherContent" class="dashboard-grid hidden">
-            <section class="teacher-subtabs">
-              <button class="teacher-subtab active" type="button" data-teacher-tab="overview">Teacher Dashboard</button>
-              <button class="teacher-subtab" type="button" data-teacher-tab="data">Data Center</button>
-              <button class="teacher-subtab" type="button" data-teacher-tab="settings">Settings</button>
-            </section>
-
-            <section class="hero-panel teacher-overview-panel">
-              <div class="teacher-picker">
-                <label for="teacherSelect">Teacher page</label>
-                <select id="teacherSelect"></select>
-              </div>
-              <div class="hero-copy">
-                <p class="eyebrow">Classroom doorway</p>
-                <h1 id="teacherTitle">Good afternoon</h1>
-                <p id="teacherSummary">Ready for sign-outs.</p>
-              </div>
-              <div class="door-scene" aria-hidden="true">
-                <div class="door-frame">
-                  <div class="door-window"></div>
-                  <div class="door-handle"></div>
+        <section id="classesView" class="view-panel" aria-labelledby="classes-heading">
+          <div class="class-management-layout">
+            <section class="panel class-list-panel">
+              <div class="panel-heading">
+                <div>
+                  <h3 id="classes-heading">Your classes</h3>
+                  <p>Select a class to edit or create a new one.</p>
                 </div>
-                <div class="floor-line"></div>
+                <button id="newClassButton" class="primary-button" type="button">Create new class</button>
               </div>
+              <div id="classList" class="class-list"></div>
             </section>
 
-            <aside class="corner-status teacher-overview-panel" aria-live="polite">
-              <div class="section-heading">
-                <span>Other Classes</span>
-                <strong id="otherClassesCount">0 out</strong>
-              </div>
-              <div id="otherClassesList" class="compact-list empty"></div>
-            </aside>
-
-            <section class="signout-panel teacher-overview-panel">
-              <div class="section-heading">
-                <span>Teacher Sign-Out / Override</span>
-                <strong id="classCapacity">0 / 2 out</strong>
-              </div>
-              <form id="signoutForm" class="signout-form">
+            <form id="pageForm" class="panel compact-panel">
+              <h3>Class setup</h3>
+              <label>
+                Class name
+                <input id="pageName" type="text" value="6th Grade ELA - Homeroom">
+              </label>
+              <div class="builder-row">
+                <label>
+                  Teaching subject
+                  <select id="subjectSelect"></select>
+                </label>
                 <label>
                   Grade
-                  <select id="teacherGradeSelect" required></select>
+                  <select id="gradeSelect"></select>
                 </label>
-                <label>
-                  Student
-                  <select id="studentSelect" required></select>
-                </label>
-                <label>
-                  Destination
-                  <select id="destinationSelect" required></select>
-                </label>
-                <label id="teacherDestinationField" class="hidden">
-                  Teacher to visit
-                  <select id="destinationTeacherSelect"></select>
-                </label>
-                <div id="selectedStudentInfo" class="student-info"></div>
-                <label class="override-row">
-                  <input id="overrideCheck" type="checkbox">
-                  Teacher override
-                </label>
-                <label id="overrideReasonField" class="hidden">
-                  Override reason
-                  <input id="overrideReason" type="text" placeholder="Required for override">
-                </label>
-                <label>
-                  Optional note
-                  <input id="teacherTripNote" type="text" placeholder="Example: took pass, urgent, called home">
-                </label>
-                <button id="signoutButton" class="primary-action" type="submit">Sign Out</button>
-                <p id="signoutMessage" class="form-message" aria-live="polite"></p>
-              </form>
-            </section>
-
-            <section class="out-panel teacher-overview-panel">
-              <div class="section-heading">
-                <span>Currently Out From This Class</span>
-                <strong id="outWarning">Open</strong>
               </div>
-              <div id="currentOutList" class="out-list"></div>
-            </section>
+              <label>
+                Student join code
+                <input id="joinCode" type="text" value="HART-ELA6">
+              </label>
+              <button class="primary-button" type="submit">Save class</button>
+              <p id="classesMessage" class="form-note" aria-live="polite"></p>
+            </form>
 
-            <section class="manage-panel teacher-overview-panel">
-              <div class="section-heading">
-                <span>Class Settings</span>
-              </div>
-              <form id="teacherNameForm" class="manage-form">
-                <label>
-                  Teacher name
-                  <input id="teacherNameInput" type="text" placeholder="Teacher name">
-                </label>
-                <button class="ghost-button" type="submit">Save Teacher Name</button>
-              </form>
-              <form id="addStudentForm" class="manage-form">
-                <label>
-                  Grade
-                  <select id="addStudentGradeSelect" required></select>
-                </label>
-                <label>
-                  Add student to this class
-                  <input id="newStudentNameInput" type="text" placeholder="Student full name">
-                </label>
-                <button class="primary-action" type="submit">Add Student</button>
-                <p id="manageMessage" class="form-message" aria-live="polite"></p>
-              </form>
-            </section>
-
-            <section class="today-panel teacher-overview-panel">
-              <div class="section-heading">
-                <span>Class Roster</span>
-                <button id="resetDayButton" class="ghost-button" type="button">Clear today's trips</button>
-              </div>
-              <div id="todayCounts" class="student-counts"></div>
-            </section>
-
-            <section id="dataContent" class="data-center hidden">
-              <section class="data-hero">
+            <section class="panel approval-panel">
+              <div class="panel-heading">
                 <div>
-                  <p class="eyebrow">Reports</p>
-                  <h1>Data Center</h1>
-                  <p>Break down trips by date range, destination, class, and student.</p>
+                  <h3>Teacher approvals</h3>
+                  <p>New teacher accounts require your approval.</p>
                 </div>
-              </section>
-
-              <section class="filter-panel">
-                <label class="student-search-field">
-                  Student
-                  <input id="reportStudentSearch" type="search" placeholder="Search student name">
-                </label>
-                <div id="reportStudentResults" class="student-search-results hidden"></div>
-                <div id="selectedStudentBanner" class="selected-student-banner hidden"></div>
-                <label>
-                  Time range
-                  <select id="reportRangeSelect">
-                    <option value="day">Today</option>
-                    <option value="week">This week</option>
-                    <option value="month">This month</option>
-                    <option value="custom">Custom</option>
-                  </select>
-                </label>
-                <label id="reportStartField" class="hidden">
-                  Start date
-                  <input id="reportStartDate" type="date">
-                </label>
-                <label id="reportEndField" class="hidden">
-                  End date
-                  <input id="reportEndDate" type="date">
-                </label>
-                <label>
-                  Destination
-                  <select id="reportDestinationSelect"></select>
-                </label>
-                <label>
-                  Class
-                  <select id="reportTeacherSelect"></select>
-                </label>
-                <label>
-                  Pie chart scope
-                  <select id="reportScopeSelect">
-                    <option value="period">Specific class period, 75 min</option>
-                    <option value="day">Overall school day, 450 min</option>
-                  </select>
-                </label>
-                <fieldset class="teacher-compare-picker">
-                  <legend>Pie chart class comparison</legend>
-                  <div id="reportPieTeacherChecks"></div>
-                </fieldset>
-              </section>
-
-              <section id="reportSummary" class="report-summary"></section>
-
-              <section class="report-grid">
-                <article class="chart-panel">
-                  <div class="section-heading">
-                    <span>Selected Student Time Pie</span>
-                    <strong id="studentPieLabel">No student selected</strong>
-                  </div>
-                  <div id="studentPieChart" class="pie-chart"></div>
-                </article>
-
-                <article class="destination-panel">
-                  <div class="section-heading">
-                    <span>Destination Breakdown</span>
-                    <strong id="destinationBreakdownLabel">All destinations</strong>
-                  </div>
-                  <div id="destinationBreakdown" class="compact-list"></div>
-                </article>
-              </section>
-
-              <section class="trip-panel">
-                <div class="section-heading">
-                  <span>Trip Details</span>
-                  <div class="heading-actions">
-                    <strong id="tripCountLabel">0 trips</strong>
-                    <button id="exportTripsButton" class="ghost-button small-button" type="button">Export CSV</button>
-                  </div>
-                </div>
-                <div id="tripTable" class="trip-table"></div>
-              </section>
-            </section>
-
-            <section id="settingsContent" class="settings-center hidden">
-              <section class="data-hero">
-                <div>
-                  <p class="eyebrow">Admin settings</p>
-                  <h1>School Setup</h1>
-                  <p>Manage privacy, alert timing, teacher contacts, and bulk roster tools.</p>
-                </div>
-              </section>
-
-              <section class="settings-grid">
-                <article class="settings-panel">
-                  <div class="section-heading">
-                    <span>Privacy</span>
-                  </div>
-                  <label class="check-row">
-                    <input id="privacyModeCheck" type="checkbox">
-                    Hide full student names on the public student display
-                  </label>
-                  <p class="settings-note">Teachers still see full names after entering the code. The student display will show first name and last initial.</p>
-                </article>
-
-                <article class="settings-panel">
-                  <div class="section-heading">
-                    <span>Long Absence Alerts</span>
-                  </div>
-                  <label>
-                    Alert after this many minutes
-                    <input id="alertMinutesInput" type="number" min="1" max="60" step="1">
-                  </label>
-                  <label>
-                    Teacher alert contacts
-                    <textarea id="alertContactsInput" rows="4" placeholder="One email or phone number per line"></textarea>
-                  </label>
-                  <p class="settings-note">The app now shows in-app alerts. Real text/email needs a small backend service; instructions are in the setup file.</p>
-                  <button id="saveSettingsButton" class="primary-action" type="button">Save Settings</button>
-                  <p id="settingsMessage" class="form-message" aria-live="polite"></p>
-                </article>
-
-                <article class="settings-panel wide-panel">
-                  <div class="section-heading">
-                    <span>Bulk Roster Import</span>
-                  </div>
-                  <label>
-                    Grade
-                    <select id="bulkImportGradeSelect"></select>
-                  </label>
-                  <label>
-                    Student names
-                    <textarea id="bulkStudentInput" rows="8" placeholder="Paste one student per line"></textarea>
-                  </label>
-                  <div class="button-row">
-                    <button id="bulkImportButton" class="primary-action" type="button">Import Students</button>
-                    <button id="downloadRosterButton" class="ghost-button" type="button">Download Roster CSV</button>
-                  </div>
-                  <p id="bulkImportMessage" class="form-message" aria-live="polite"></p>
-                </article>
-              </section>
+              </div>
+              <div id="approvalList" class="approval-list"></div>
             </section>
           </div>
         </section>
 
-        <section id="displayView" class="view active">
-          <div class="display-page">
-            <section class="display-hero">
+        <section id="studentView" class="view-panel" aria-labelledby="student-heading">
+          <div class="student-layout">
+            <section class="panel calendar-panel">
+              <div class="panel-heading">
+                <div>
+                  <h3 id="student-heading">Choose a day</h3>
+                  <p>Future dates stay locked.</p>
+                </div>
+                <input id="studentDate" type="date">
+              </div>
+              <div class="calendar-summary" id="calendarSummary"></div>
+            </section>
+
+            <form id="answerForm" class="panel answer-panel">
+              <div class="assignment-meta" id="assignmentMeta"></div>
+              <h3 id="studentQuestion">No bell ringer selected yet.</h3>
+              <label>
+                Your answer
+                <textarea id="studentAnswer" rows="7" placeholder="Type your response here."></textarea>
+              </label>
+              <button class="primary-button" type="submit">Submit for grading</button>
+              <div id="studentFeedback" class="feedback-box" aria-live="polite"></div>
+            </form>
+          </div>
+        </section>
+
+        <section id="gradebookView" class="view-panel" aria-labelledby="gradebook-heading">
+          <section class="panel">
+            <div class="panel-heading gradebook-heading">
               <div>
-                <p class="eyebrow">Student sign-out</p>
-                <h1>Leaving the room?</h1>
-                <p>Select your grade, your name, and where you are going. Sign back in when you return.</p>
+                <h3 id="gradebook-heading">Gradebook</h3>
+                <p>Daily scores plus weekly and monthly totals.</p>
               </div>
-              <div class="display-meter">
-                <span id="displayTotalOut">0</span>
-                <small>students currently out</small>
+              <div class="gradebook-controls">
+                <label>
+                  View
+                  <select id="gradebookRange">
+                    <option value="day">Day</option>
+                    <option value="week">Week</option>
+                    <option value="month">Month</option>
+                  </select>
+                </label>
+                <label>
+                  Anchor date
+                  <input id="gradebookDate" type="date">
+                </label>
               </div>
-            </section>
-            <section class="kiosk-panel">
-              <div class="section-heading">
-                <span>Sign Out</span>
-                <strong id="displayCapacity">0 / 2 out</strong>
-              </div>
-              <form id="displaySignoutForm" class="kiosk-form">
-                <label>
-                  Class
-                  <select id="displayTeacherSelect" required></select>
-                </label>
-                <label>
-                  Grade
-                  <select id="displayGradeSelect" required></select>
-                </label>
-                <label>
-                  Student
-                  <select id="displayStudentSelect" required></select>
-                </label>
-                <label>
-                  Destination
-                  <select id="displayDestinationSelect" required></select>
-                </label>
-                <label id="displayTeacherDestinationField" class="hidden">
-                  Teacher to visit
-                  <select id="displayDestinationTeacherSelect"></select>
-                </label>
-                <button id="displaySignoutButton" class="primary-action" type="submit">Sign Out</button>
-                <p id="displaySignoutMessage" class="form-message" aria-live="polite"></p>
-              </form>
-            </section>
-            <section id="capacityAlert" class="capacity-alert hidden"></section>
-            <section id="displayCards" class="display-cards"></section>
-          </div>
+            </div>
+            <div id="gradebookStats" class="stats-grid"></div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Student</th>
+                    <th>Email</th>
+                    <th>Submissions</th>
+                    <th>Total</th>
+                    <th>Average</th>
+                    <th>Latest feedback</th>
+                  </tr>
+                </thead>
+                <tbody id="gradebookBody"></tbody>
+              </table>
+            </div>
+          </section>
         </section>
-
       </main>
     </div>
 
-    <script type="module" src="app.js"></script>
+    <script src="standards-data.js?v=20260628a"></script>
+    <script src="app.js?v=20260628a"></script>
   </body>
 </html>
